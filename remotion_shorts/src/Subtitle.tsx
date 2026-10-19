@@ -5,6 +5,7 @@ const NEON = "#FFF01F";
 const FONT = "'Pretendard', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif";
 const PUNCT = /[,."“”'‘’()]/g;
 const ONE_LINE_MAX = 14; // 이 글자 수 이하면 한 줄, 넘으면 어절 기준으로 두 줄
+const TWO_LINE_MAX = 32; // 이 글자 수를 넘으면 세 줄로 나눈다
 const LINE_WIDTH = 930; // 자막이 쓸 가로 폭(px)
 
 export type SubWord = { text: string; start: number; end: number }; // 초, 문장 시작 기준
@@ -22,10 +23,26 @@ const highlightMask = (text: string, keywords: string[]) => {
   return mask;
 };
 
-/** 어절 배열을 한 줄 또는 길이가 가장 고른 두 줄로 나눈다 (줄 인덱스 배열을 돌려줌) */
+/** 어절 배열을 한 줄, 또는 길이가 가장 고른 2~3줄로 나눈다 (줄 인덱스 배열을 돌려줌). 긴 문장은 3줄까지 허용 */
 const splitLines = (tokens: string[]): number[][] => {
   const len = (a: number, b: number) => tokens.slice(a, b).join(" ").length;
-  if (tokens.length < 2 || len(0, tokens.length) <= ONE_LINE_MAX) return [tokens.map((_, i) => i)];
+  const total = len(0, tokens.length);
+  if (tokens.length < 2 || total <= ONE_LINE_MAX) return [tokens.map((_, i) => i)];
+  const idx = tokens.map((_, i) => i);
+  if (total > TWO_LINE_MAX && tokens.length >= 3) {
+    let best: [number, number] = [1, 2];
+    let bestMax = Infinity;
+    for (let a = 1; a < tokens.length - 1; a++) {
+      for (let b = a + 1; b < tokens.length; b++) {
+        const m = Math.max(len(0, a), len(a, b), len(b, tokens.length));
+        if (m < bestMax) {
+          bestMax = m;
+          best = [a, b];
+        }
+      }
+    }
+    return [idx.slice(0, best[0]), idx.slice(best[0], best[1]), idx.slice(best[1])];
+  }
   let best = 1;
   let bestMax = Infinity;
   for (let k = 1; k < tokens.length; k++) {
@@ -35,7 +52,6 @@ const splitLines = (tokens: string[]): number[][] => {
       best = k;
     }
   }
-  const idx = tokens.map((_, i) => i);
   return [idx.slice(0, best), idx.slice(best)];
 };
 
@@ -64,7 +80,7 @@ export const SentenceSubtitle: React.FC<{
 
   const lines = splitLines(tokens);
   const maxLine = Math.max(...lines.map((l) => l.map((i) => tokens[i]).join(" ").length));
-  const size = Math.max(46, Math.min(80, Math.floor(LINE_WIDTH / (maxLine * 0.98))));
+  const size = Math.max(lines.length >= 3 ? 38 : 46, Math.min(lines.length >= 3 ? 48 : 80, Math.floor(LINE_WIDTH / (maxLine * 0.98))));
   const timed = words && words.length === tokens.length ? words : null;
 
   const enter = spring({ frame, fps, config: { damping: 16, stiffness: 180, mass: 0.7 } });
@@ -72,8 +88,8 @@ export const SentenceSubtitle: React.FC<{
   return (
     <div
       style={{
-        position: "absolute", left: 0, right: 0, top: 1450, height: 190,   // 하단 UI(채널명/구독/제목) 안전지대: 블록 하단이 화면 아래에서 280px
-        display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+        position: "absolute", left: 0, right: 0, top: lines.length >= 3 ? 1462 : 1450, height: lines.length >= 3 ? 176 : 190,   // 하단 UI(채널명/구독/제목) 안전지대: 블록 하단이 화면 아래에서 280px
+        display: "flex", flexDirection: "column", alignItems: "center", justifyContent: lines.length >= 3 ? "flex-start" : "center",
         gap: size * 0.12, opacity: Math.min(1, enter * 1.6),
         transform: `translateY(${(1 - enter) * 24}px)`,
       }}

@@ -24,6 +24,7 @@ from dotenv import load_dotenv
 
 import broll
 import manual_queue
+import housekeeping
 from concepts import classify, classify_sub
 
 ROOT = Path(__file__).resolve().parent
@@ -32,10 +33,10 @@ WORK_DIR = OUT_DIR / "work"
 SAMPLE_DIR = ROOT / "sample_images"
 
 W, H, FPS = 1080, 1920, 30
-# 귀차니스트 마멋 보이스: 덤덤한 기본 피치, 늘어지지 않는 속도
+# 쇼핑천재 마멋선생 보이스: 덤덤한 기본 피치, 늘어지지 않는 속도
 VOICE = "ko-KR-InJoonNeural"
 PITCH = "+0Hz"
-RATE = "+15%"          # 안정적인 빠른 딕션
+RATE = "+8%"           # 너무 빠르지 않은 딕션 (영상 길이 확보)
 GAP = 0.18            # 문장 사이 무음 간격(초)
 API_RETRIES = 3
 MAX_TITLE = 20       # 상단 훅 제목 최대 글자 수(공백 포함)
@@ -49,9 +50,9 @@ SALE_POOL = [
 ]
 CTA_POOL = [
     "품절되고 후회하지 말고 프로필 링크 눌러라.",
-    "귀찮게 고민할 시간에 프로필 링크 누르고 편해져라.",
-    "프로필 링크 남겨둘 테니까 인생 편하게 살 사람만 가봐.",
-    "품절되기 전에 프로필 링크 누르고 귀찮음 끝내라.",
+    "오늘 수업은 여기까지 궁금하면 프로필 링크에서 직접 확인해봐.",
+    "프로필 링크에 정리해뒀으니까 궁금하면 복습하러 와.",
+    "품절되기 전에 프로필 링크에서 복습하고 가봐.",
 ]
 # 훅 컷에 쓸 마멋 영상 분위기(assets/broll/_mascot/<calm|intense>/): 일상 공감형은 차분한 컷, 활동·취미형은 강렬한 컷
 MASCOT_TONE = {"lazy": "calm", "desk": "calm", "camp": "intense", "sport": "intense", "hobby": "intense"}
@@ -60,6 +61,8 @@ CTA_NAVER = [      # 네이버 클립은 상품 태그, 유튜브는 프로필 �
     "궁금하면 상품 태그나 프로필 링크에서 어떤지 직접 보고 가.",
     "써보고 싶으면 상품 태그나 프로필 링크에서 한번 둘러봐.",
 ]
+NOTICE = ""             # 면책 문구(브랜드와 무관한 개인 콘텐츠·개인 의견 등). 영상/설명/댓글에 같이 표시
+EXTRA_NOTES: list[str] = []   # 설명/댓글에만 들어가는 추가 안내(예: 혜택 기간)
 PLATFORM = "알리"        # main()에서 현재 영상의 플랫폼으로 설정 (CTA 문구 선택용)
 CTA_NEUTRAL = [
     "마음에 들면 프로필 링크에서 직접 확인해봐.",
@@ -72,6 +75,9 @@ CLICHE_RE = re.compile(r"버튼만 누르면|손 하나 안|하면 끝남")     
 SPEC_RE = re.compile(r"\d+\s*(ml|mah|pa|w|cm|mm|kg|g|v|hz)\b|USB|LED|파스칼|밀리리터|밀리암페어|\d{3,}", re.I)   # 스펙 나열 금지
 TRANSL_RE = re.compile(r"털이 (알아서|들어)|셋업|장치|기어 ?모드|순환기|솔루션|듀얼|스마트 ?제어")   # 중국어 직역/기계 번역투: 나오면 재생성
 COLOR_RE = re.compile(r"(빨간|파란|노란|초록|검은|검정|하얀|흰|분홍|핑크|보라색|회색|주황|파랑|빨강)\s?(색|빛)?")   # 상품 이미지/영상마다 색이 달라 오인 위험: 색 언급 금지
+ORAL_USE_RE = re.compile(r"한 ?모금|마시|마셔|삼키|삼켜|먹[어으는]")      # 입에 넣는 용품이 아닌 것(가글/세제/화장품 등)을 먹는 것처럼 읽히는 표현 금지
+NOT_FOR_DRINKING_RE = re.compile(r"가글|구강청결|치약|세정|세제|샴푸|린스|바디워시|소독|표백|락스|스킨|로션|클렌징")
+CURRENT_NAME = ""        # 현재 대본을 만드는 상품명 (validate_script 의 상품별 규칙용)
 HEALTH_RE = re.compile(r"치과|치료|예방|살균|염증|통증|질환|건강|의사|완치|효과가 (좋|입증)")   # 의학적 효능 주장 금지
 PRICE_RE = re.compile(r"원대|\d\s*원|[만천]\s*원|\d\s*%|퍼센트|할인율|\d{5,}")   # 구체적 가격/할인율 언급 금지
 OLD_MAN = re.compile(r"자네|라네|보게나|하게나|말이지|말이야|이 말이")   # 이전 노신사 말투: 나오면 재생성
@@ -148,13 +154,15 @@ OFFLINE_SCRIPT = {
         "가방에 던져 넣기만 하면 충전선까지 붙어 있어서 바로 꽂아 쓰면 됨.",
         "손바닥보다 작아서 주머니에 넣어도 있는지도 모르게 가벼움.",
         "출퇴근길 지하철이나 카페에서 꺼내 쓰기에 딱 좋은 크기임.",
+        "충전기 챙기는 걸 자꾸 깜빡하는 사람한테 특히 잘 맞아.",
+        "크기가 작아서 대신 짐이 확 줄어드는 게 제일 큰 장점이야.",
         "이 크기에 이 기능이 들어갔다는 건 직접 확인해봐야 믿길 거야.",
         LAST_LINE,
     ],
     "title": "충전기 챙기기 귀찮지?",
     "headline": "케이블 일체형 보조배터리",
     "keywords": ["가방에 던져", "바로 꽂아", "주머니"],
-    "hashtags": ["#귀차니스트", "#꿀템", "#자취템", "#가성비", "#마멋선생"],
+    "hashtags": ["#쇼핑천재", "#꿀템", "#자취템", "#가성비", "#마멋선생"],
     "pinned_comment": "🔥 초특가 링크는 프로필(채널 링크)에서 확인하세요!",
 }
 
@@ -172,10 +180,11 @@ def is_fixed(x: str) -> bool:
 def generate_script(api_key: str, name: str, features: str, concept: dict | None = None) -> dict:
     from concepts import DEFAULT
     concept = concept or DEFAULT
-    global LAST_LINE
+    global LAST_LINE, CURRENT_NAME
+    CURRENT_NAME = name
     LAST_LINE = random.choice(CTA_NAVER if PLATFORM == "네이버" else (CTA_POOL if concept["key"] == "lazy" else CTA_NEUTRAL))
     hook_examples = " / ".join(f'"{h}"' for h in concept["hooks"])
-    prompt = f"""너는 쇼츠 채널 '마멋선생'의 대본 작가다. 마멋은 만사 귀찮아하는 프로 귀차니스트 마멋이고, 좋은 물건을 덤덤하고 찰지게 추천하는 찐친 같은 캐릭터다. 귀차니스트 설정은 말투의 결(덤덤하고 힘 뺀 어조)로만 깔고, 내용에서 억지로 "귀찮다"를 반복하지는 않는다.
+    prompt = f"""너는 쇼츠 채널 '쇼핑천재 마멋선생'의 대본 작가다. 마멋은 쇼핑에 빠삭한 선생님(박사) 캐릭터로, 상품을 꼼꼼히 따져보고 핵심만 쉽게 짚어서 알려주는 믿음직한 선생님 같은 말투를 쓴다. 가르치려 들거나 딱딱하지 않고 친근한 반말로, "자 포인트만 짚어줄게" "이건 알아두면 좋아" "체크해봐" 같은 선생님/박사 톤이 자연스럽게 묻어난다. 훅이나 마무리에 "수업" "숙제" "복습" 같은 말을 가끔(대본 전체에서 한 번 정도) 써도 좋지만 억지로 넣지는 않는다.
 
 [이번 영상 콘셉트: {concept["name"]}]
 - 시청자 상황: {concept["situation"]}
@@ -183,9 +192,9 @@ def generate_script(api_key: str, name: str, features: str, concept: dict | None
 - 훅은 이 상품을 모르는 사람이 읽어도 무슨 이야기인지 바로 이해되는 완결된 문장이어야 한다. 상품과 무관하거나 의미가 모호한 문장은 쓰지 않는다.
 - 훅 예시는 말투 참고용일 뿐이다. 이 상품과 상황이 다르면 완전히 무시하고 이 상품의 실제 사용 장면에서 훅을 만든다(예시 문장이나 소재를 가져오지 말 것): {hook_examples}
 
-[말투 규칙] 귀찮아서 대충 사는 찐친 말투
-- 친구한테 카톡으로 툭 던지는 날것의 반말: ~잖아 ~지? ~인데 ~함 ~더라 ~갖다 버리려 했는데 (설명서/광고 말투 금지)
-- 일상에서 킹받는 순간을 구체적으로 찌른다. 말투 참고(그대로 베끼지 말 것): "더워 죽겠는데 일어나기도 싫지" "선 치우는 것도 일인데" "바람 약하면 갖다 버리려 했는데 의외로 세더라"
+[말투 규칙] 쇼핑 잘 아는 선생님이 친근하게 짚어주는 반말
+- 친근한 반말로 핵심을 또박또박 짚어준다: ~잖아 ~지? ~인데 ~거든 ~해봐 ~이야 (설명서/광고 말투 금지, 노신사 말투 금지)
+- 일상에서 겪는 순간을 구체적으로 짚는다. 말투 참고(그대로 베끼지 말 것): "이건 체크해봐야 해" "포인트는 딱 하나야" "알아두면 편한 게 있어" "써보면 차이가 나지"
 - 같은 패턴 반복 금지: "버튼만 누르면" "손 하나 안 움직여도 됨" "~하면 끝남" 같은 천편일률 문장은 쓰지 않는다. 문장마다 어미와 흐름을 다르게 쓴다.
 - 노인 말투 절대 금지: ~라네 ~보게나 ~하게나 ~말이지 ~말이야 자네
 - 인사말 절대 금지.
@@ -195,10 +204,10 @@ def generate_script(api_key: str, name: str, features: str, concept: dict | None
 [상식성 규칙 - 훅(1번 문장)과 전체 내용]
 - 상식적으로 실제로 일어나는 일상적인 불편함만 다룬다. 사람들이 진짜 겪는 상황이어야 한다.
 - 아침마다 부품을 매일 교체한다거나 소모품을 하루에도 몇 번씩 갈아 끼운다는 식의 상식 밖 억지 상황을 지어내서 귀차니즘을 유도하지 않는다.
-- 상품의 핵심 기능(본연의 가치)에서 오는 진짜 편리함을 중심으로 찐친 톤 대본을 구성한다. 상품명이 부품/소모품처럼 보여도 그 상품이 쓰이는 본체의 일상적 효용만 말하고 어색한 상황을 만들지 않는다.
+- 상품의 핵심 기능(본연의 가치)에서 오는 진짜 편리함을 중심으로 선생님 톤 대본을 구성한다. 상품명이 부품/소모품처럼 보여도 그 상품이 쓰이는 본체의 일상적 효용만 말하고 어색한 상황을 만들지 않는다.
 - 상품명과 특징에 없는 기능이나 효과를 지어내지 않는다.
 - 매일 부품을 바꾼다거나 일상에서 일어나지 않는 가상의 비상식적 불편함을 지어내지 않는다.
-- 상품 본연의 핵심 기능 하나만 짚어서 찐친 말투로 짧고 담백하게 쓴다. 기능을 여러 개 늘어놓지 않는다.
+- 상품 본연의 핵심 기능 하나만 짚어서 선생님 말투로 짧고 담백하게 쓴다. 기능을 여러 개 늘어놓지 않는다.
 - 하나의 간편한 사용법으로만 통일한다. 문장끼리 모순되면 안 된다. (예: 한 문장에서 "물 묻히고 쓱 밀면"이라 해놓고 다른 문장에서 "물 없이 그냥 밀면"이라 쓰는 식 금지)
 - 훅(1번)은 사람들이 실제로 매일 겪는 진짜 불편함이어야 한다. 억지 행동 묘사 금지.
   나쁜 예: "면도기 들고 서서 턱 만지작거리는 거 귀찮지?" (아무도 그렇게 안 한다)
@@ -221,6 +230,7 @@ def generate_script(api_key: str, name: str, features: str, concept: dict | None
 [사실 규칙 - 가장 중요]
 - 상품 정보는 상품명이 거의 전부다. 상품명에 드러나지 않은 속성(충전식인지 유선인지, 방수인지, 소음, 소재, 조명 기능 등)은 절대 단정하지 않는다. 추측이 필요한 부분은 쓰지 말고 사용 장면과 기분 위주로 쓴다.
 - 색상(파란색, 검은색, 흰색 등)을 말하지 않는다. 상품 사진과 영상의 색이 다를 수 있다.
+- 입에 넣는 용품(가글 구강청결제 등)이나 세제 화장품은 마시거나 먹는 것으로 읽히는 표현("한 모금" "마시" "삼키" "먹")을 쓰지 않는다. 사용 후 뱉거나 헹구거나 바른다고 쓴다. 용기를 덜어서 다른 곳에 담아 쓰라는 식의 상품에 없는 사용법도 쓰지 않는다.
 - 건강/의료/치료/예방 효과를 말하지 않는다. (나쁜 예: "치과 갈 일이 줄어들지" "잇몸까지 시원하게")
 - 존재하지 않는 장면을 만들지 않는다. (나쁜 예: 드라이어로 "차에서 머리 식히기", 선풍기를 "방송할 때 조용히")
 
@@ -231,19 +241,21 @@ def generate_script(api_key: str, name: str, features: str, concept: dict | None
 - 좋은 문장 예: "무선인데도 옛날 패드 손맛 그대로 살아 있더라." "책상 위 원하는 곳에 딱 맞춰 바람을 보낼 수 있음." "라이딩 나가기 전에 타이어 바람 빠진 거 보고 한숨 나온 적 있지?"
 - 나쁜 문장 예: "가볍고 충전돼서 여행 갈 때 챙기기도 편함." (근거 없는 충전) "이거 하나 들고 다니면 충전기 찾을 일 없이 알아서 금방 채워줌." (뜻이 겹치고 어색) "친구 집이나 캠핑장에서도 꺼내서 바로 연결해." (명령형) "바람이 진짜 세게 나오는데 궁금하면 링크에서 봐." (공식 같은 마무리)
 
-[구조] 정확히 6문장 (23~25초 분량)
+[구조] 정확히 8문장 (약 30초 분량)
 1. 훅: 누구나 매일 겪는 진짜 불편함에 공감하는 구어체 질문. 공백 포함 22~34자.
 2. 핵심 기능: 써보니 이게 해결되더라는 체감과 동작 묘사. 어려운 기술 용어 없이 한국인이 일상에서 쓰는 직관적인 표현만. 한 호흡으로 공백 포함 30~38자.
    예: "마른 얼굴에 대고 쓱 문지르면 10초 만에 깔끔하게 다 잘림."
 3. 추가 장점: 배터리 휴대성 보관 같은 실사용 디테일. 공백 포함 30~38자.
 4. 활용 팁: 실내 야외 차량 등 구체적으로 어디서 어떻게 쓰는지 상황 묘사. 공백 포함 26~34자.
-5. 호기심 유발: 이 상품만의 포인트 하나를 짚어서 "어떤 느낌일지 궁금해지게" 끝낸다. "링크"라는 단어는 쓰지 않는다(마지막 CTA 문장이 링크를 안내한다). 가격 할인 언급 금지. 공백 포함 20~40자. 4번과 같은 말을 반복하지 않는다.
-6. CTA 고정 문장: 정확히 "{LAST_LINE}"
+5. 이런 사람한테 추천: 이 상품이 특히 잘 맞는 사람이나 상황 한 가지. 공백 포함 24~36자. 4번과 다른 장면이어야 한다.
+6. 솔직한 한 줄: 이 상품의 포인트나 살짝 아쉬울 수 있는 점을 솔직하게 한 문장으로(상품명과 특징에서 확인되는 범위에서만). 공백 포함 24~38자.
+7. 호기심 유발: 이 상품만의 포인트 하나를 짚어서 "어떤 느낌일지 궁금해지게" 끝낸다. "링크"라는 단어는 쓰지 않는다(마지막 CTA 문장이 링크를 안내한다). 가격 할인 언급 금지. 공백 포함 20~40자. 앞 문장과 같은 말을 반복하지 않는다.
+8. CTA 고정 문장: 정확히 "{LAST_LINE}"
 
 상품명: {name}
 특징: {features}
 
-위 상품의 귀차니스트 마멋 스타일 쇼츠 대본을 JSON으로만 출력해.
+위 상품의 쇼핑천재 마멋선생 스타일 쇼츠 대본을 JSON으로만 출력해.
 규칙:
 - 이모지 괄호 따옴표 금지. 과장 허위 효능 금지. 가격 할인율 금액 언급 금지. 상품명과 특징에 있는 사실에서 벗어난 기능을 지어내지 않는다.
 - title: 화면 상단에 크게 나올 훅 제목 1개. 훅 규칙을 따르되 문장이 끝까지 완결돼야 한다(말줄임이나 끊긴 문장 금지: "바람 빠져 있으면?" 같은 불완전한 문장 X, "바람 빠진 타이어 만난 적 있지?" O). 공백 포함 20자 이내.
@@ -251,7 +263,7 @@ def generate_script(api_key: str, name: str, features: str, concept: dict | None
 - keywords: 자막에서 노란색으로 강조할 핵심 단어 2~4개 (sentences 안에 글자 그대로 등장하는 단어)
 - hashtags: 해시태그 정확히 5개 ('#' 포함 마지막은 #마멋선생)
 - pinned_comment: 댓글 문구. 쇼츠 댓글의 링크는 클릭이 안 되므로 URL을 넣지 말고 "프로필 링크에서 제품 확인" 취지로 안내하고, 제휴 마케팅 수수료 지급 안내 문구를 반드시 포함.
-출력 형식: {{"sentences":["훅","핵심 기능","추가 장점","활용 팁","호기심 유발","{LAST_LINE}"],"title":"...","headline":"...","keywords":[...],"hashtags":[...],"pinned_comment":"..."}}"""
+출력 형식: {{"sentences":["훅","핵심 기능","추가 장점","활용 팁","이런 사람한테 추천","솔직한 한 줄","호기심 유발","{LAST_LINE}"],"title":"...","headline":"...","keywords":[...],"hashtags":[...],"pinned_comment":"..."}}"""
     last_err = None
     soft = None          # (편차, 대본): 글자 수만 어긋난 시도 중 가장 근접한 것
     for attempt in range(1, API_RETRIES + 1):
@@ -301,7 +313,7 @@ def review_script(api_key: str, name: str, features: str, d: dict) -> dict:
 한국인이 소리 내어 읽었을 때 어색하거나 뜻이 불분명한 문장(조사 누락, 번역투, 앞뒤 모순, 상품과 무관한 내용, 말이 안 되는 상황)이 있는지 문장 하나씩 점검하라.
 [사실 검증] 각 문장의 주장을 하나씩 뽑아, 상품명과 특징에서 확인되는 사실인지 따져라. 확인되지 않는 기능·장면(예: 상품명에 없는 벽걸이, 충전식 여부, 소음, 방송용 등)이나 상품의 용도와 맞지 않는 훅(다른 상품 얘기)은 상품명에서 확실한 사실과 일반적인 사용 장면만으로 다시 써라.
 문제 있는 문장과 title/headline만 자연스럽게 고치고 문제 없는 문장은 글자 그대로 둔다. 문장 수와 순서, 글자 수 범위(공백 포함), 마지막 고정 CTA 문장, 쉼표 금지, 가격 언급 금지는 유지한다.
-다음은 반드시 지킨다: 숫자(2자리 이상)와 용량/전원/풍속 등 스펙 수치·단위(ml mAh W Pa cm 등)를 쓰지 않는다. "링크"는 5번째 문장에 쓰지 않는다. "~더라"는 한 번만, "~함"은 두 번까지.
+다음은 반드시 지킨다: 숫자(2자리 이상)와 용량/전원/풍속 등 스펙 수치·단위(ml mAh W Pa cm 등)를 쓰지 않는다. "링크"는 7번째(호기심) 문장에 쓰지 않는다. "~더라"는 한 번만, "~함"은 두 번까지.
 상품명과 특징에 없는 기능을 지어내지 않는다. 같은 JSON 형식으로만 출력."""
     feedback = ""
     for attempt in (1, 2):
@@ -356,7 +368,7 @@ class LengthError(ValueError):
 
 
 # 문장별 허용 글자 수(공백 포함). 프롬프트 지시 범위보다 위아래로 5자 정도 여유를 둔다.
-LEN_LIMITS = ((17, 38), (21, 43), (21, 43), (19, 39), (17, 45))     # 자막이 화면 2줄에 읽기 좋게 들어가는 길이
+LEN_LIMITS = ((17, 38), (21, 43), (21, 43), (19, 39), (19, 41), (19, 43), (17, 45))     # 자막이 화면 2줄에 읽기 좋게 들어가는 길이
 SOFT_PASS_DEV = 3        # 3회 모두 길이만 어긋났다면 범위를 3자 이내로 벗어난 대본은 그대로 통과시킨다
 
 
@@ -367,8 +379,8 @@ def validate_script(d: dict) -> dict:
     if not isinstance(sents, list) or not all(isinstance(x, str) for x in sents):
         raise ValueError("sentences가 문자열 배열이 아닙니다")
     body = [x.strip() for x in sents if x.strip() and not is_fixed(x)]
-    if len(body) != 5:
-        raise ValueError(f"훅+핵심 기능+추가 장점+활용 팁+호기심 5문장이어야 합니다({len(body)}개)")
+    if len(body) != 7:
+        raise ValueError(f"훅+핵심+장점+팁+추천+솔직한 한 줄+호기심 7문장이어야 합니다({len(body)}개)")
     joined = " ".join(sents)
     if TRANSL_RE.search(joined):
         raise ValueError("직역투/기계 번역투 표현이 들어 있습니다")
@@ -376,6 +388,8 @@ def validate_script(d: dict) -> dict:
         raise ValueError("천편일률 문장 패턴이 들어 있습니다")
     if SPEC_RE.search(" ".join(body)):
         raise ValueError("스펙/수치 나열이 들어 있습니다")
+    if NOT_FOR_DRINKING_RE.search(CURRENT_NAME) and ORAL_USE_RE.search(joined):
+        raise ValueError("마시거나 먹는 것으로 읽히는 표현이 들어 있습니다(헹구고 뱉는다고 써야 함)")
     if COLOR_RE.search(joined):
         raise ValueError("색상 언급이 들어 있습니다(상품 색을 단정하지 않는다)")
     if HEALTH_RE.search(joined):
@@ -409,9 +423,10 @@ def normalize_script(d: dict) -> dict:
     clean = lambda t: re.sub(r"\s+", " ", re.sub(r"[,，、]", " ", t)).strip()      # 쉼표 완전 제거
     sents = [clean(s) for s in d["sentences"] if s.strip()]
     sents = [s for s in sents if s and not is_fixed(s)]
-    sents = sents[:5] + [LAST_LINE]   # 훅 + 핵심 기능 + 추가 장점 + 활용 팁 + 호기심 + CTA
+    sents = sents[:7] + [LAST_LINE]   # 훅 + 핵심 + 장점 + 팁 + 추천 + 솔직한 한 줄 + 호기심 + CTA
     tags = [t if t.startswith("#") else "#" + t for t in d.get("hashtags", [])][:5]
-    comment = f"{DISCLOSURE}\n🔗 상품 링크: {PLACEHOLDER}"      # 대가성 문구를 맨 앞줄에 (고정 댓글에서 잘리지 않게)      # 모델 문구 대신 고정 형식 (링크는 main에서 치환)
+    notice = "".join(f"\n{t}" for t in ([NOTICE] if NOTICE else []) + EXTRA_NOTES)
+    comment = f"{DISCLOSURE}{notice}\n🔗 상품 링크: {PLACEHOLDER}"      # 대가성 문구를 맨 앞줄에 (고정 댓글에서 잘리지 않게). 링크는 main에서 치환
     text = " ".join(sents)
     kws = [k.strip() for k in d.get("keywords", []) if isinstance(k, str) and k.strip() and k.strip() in text][:4]
     if not kws:   # 모델이 키워드를 못 줬으면 숫자가 든 단어를 노란색 강조 대상으로 사용
@@ -467,6 +482,7 @@ _TTS_WORDS = [
     (re.compile(r"(\d+)\s*cm\b", re.I), r"\1센티"),
     (re.compile(r"\bUSB\b", re.I), "유에스비"),
     (re.compile(r"\bLED\b", re.I), "엘이디"),
+    (re.compile(r"\bUP\b"), "업"),
 ]
 
 
@@ -608,7 +624,7 @@ def prepare_marmot(dest: Path) -> str | None:
 
 # 문장 순서별 마멋 표정(마멋선생/표정/marmot_<이름>.png, prepare_expressions.py 로 생성):
 # 훅(곤란) -> 핵심 기능(놀람) -> 추가 장점(웃음) -> 활용 팁(생각) -> 호기심(윙크) -> CTA(닦달)
-EXPRESSION_PLAN = ["worried", "shocked", "laugh", "think", "wink", "angry"]
+EXPRESSION_PLAN = ["worried", "shocked", "laugh", "think", "shocked", "laugh", "wink", "angry"]
 
 
 def prepare_expressions(count: int) -> list[str] | None:
@@ -639,7 +655,7 @@ def build_remotion_data(data: dict, sentences: list[str], durs: list[float], aud
                         media: list[Path], bgm: Path | None, image_urls: list[str],
                         video: Path | None = None, words: list[list[dict]] | None = None,
                         badge: str = "", broll_clips: list[Path] | None = None, hero: bool = False,
-                        concept_key: str = "") -> dict:
+                        concept_key: str = "", plain_images: bool = False, product_name: str = "") -> dict:
     """문장별 TTS 길이(초)와 에셋을 remotion_shorts/public 으로 복사하고 src/data.json 을 기록한다."""
     REMOTION_PUBLIC.mkdir(parents=True, exist_ok=True)
     for old in REMOTION_PUBLIC.glob("*"):          # 이전 실행의 에셋 정리
@@ -664,7 +680,13 @@ def build_remotion_data(data: dict, sentences: list[str], durs: list[float], aud
     broll_names = []
     hero_trim = 0.0
     if hero and broll_clips:                 # 마멋선생 AI 영상을 훅 컷(첫 컷)에 쓴다
-        broll_clips = [broll.pick("_mascot", 1, MASCOT_TONE.get(concept_key, "calm"))[0]] + list(broll_clips)[:-1]
+        specific: list[Path] = []
+        spec_root = broll.BROLL_DIR / "_mascot" / "specific"
+        for d in (sorted(spec_root.glob("*")) if spec_root.exists() else []):
+            if d.is_dir() and d.name in product_name:        # 상품 전용 마멋 훅 영상 (폴더 이름이 상품명에 들어 있으면)
+                specific += sorted(p for p in d.glob("*.mp4") if broll.clip_duration(p) >= broll.MIN_USE_DUR)
+        hero_clip = random.choice(specific) if specific else broll.pick("_mascot", 1, MASCOT_TONE.get(concept_key, "calm"))[0]
+        broll_clips = [hero_clip] + list(broll_clips)[:-1]
         off = broll.BROLL_DIR / "_mascot" / "offsets.json"      # 클립별 훅 시작 지점(초): 가만히 서 있는 앞부분을 건너뛴다
         if off.exists():
             hero_trim = float(json.loads(off.read_text(encoding="utf-8")).get(broll_clips[0].name, 0))
@@ -694,8 +716,10 @@ def build_remotion_data(data: dict, sentences: list[str], durs: list[float], aud
         "video": video_name,
         "broll": broll_names,
         "brollSources": [str(c.relative_to(ROOT)) for c in (broll_clips or [])],
+        "plainImages": plain_images,
         "heroFirst": bool(hero and broll_clips),
         "disclosure": DISCLOSURE_SHORT,
+        "notice": NOTICE,
         "heroTrim": hero_trim,
         "videoInfo": video_info,
         "tail": TAIL,
@@ -752,9 +776,13 @@ def write_work_log(data: dict, product: dict | None, args, concept: dict, full_n
             "## 네이버 클립 게시용 (앱에서 직접 업로드)",
             "- 본문 첫 부분에 아래 문구를 그대로 넣고, 쇼핑 커넥트 상품 태그/스티커를 연결하세요 (2025.12~ 태그 시 [광고]가 자동 표시됨).",
             f"  - 본문 첫 줄: {DISCLOSURE}",
+            *([f"  - 본문 둘째 줄: {NOTICE}"] if NOTICE else []),
+            *[f"  - 본문 추가 줄: {t}" for t in EXTRA_NOTES],
             f"  - 본문: {data['title']} {' '.join(data['hashtags'])}",
             "- 첫 번째 고정 댓글(문구가 잘리지 않게 맨 위):",
             f"  - {DISCLOSURE}",
+            *([f"  - {NOTICE}"] if NOTICE else []),
+            *[f"  - {t}" for t in EXTRA_NOTES],
             f"  - {args.link}",
             "- 네이버TV로 올릴 경우에는 제목에 [광고]를 넣어야 합니다.", "",
         ]
@@ -789,7 +817,7 @@ def write_work_log(data: dict, product: dict | None, args, concept: dict, full_n
 
 # ───────────────────────── main ─────────────────────────
 def main():
-    global FFMPEG, FFPROBE, DISCLOSURE, DISCLOSURE_SHORT, PLATFORM
+    global FFMPEG, FFPROBE, DISCLOSURE, DISCLOSURE_SHORT, PLATFORM, NOTICE, EXTRA_NOTES
     ap = argparse.ArgumentParser()
     ap.add_argument("--name", default="케이블 일체형 10000mAh 소형 보조배터리")
     ap.add_argument("--features", default="10000mAh 대용량, 케이블 내장, 초소형 경량, 아이폰/갤럭시 호환")
@@ -805,7 +833,9 @@ def main():
     ap.add_argument("--ali-url", help="알리익스프레스 상품 URL (sample_images에 소재 다운로드)")
     ap.add_argument("--image-url", action="append", help="상품 이미지 URL (여러 번 지정 가능, 지정 시 sample_images보다 앞에 사용)")
     ap.add_argument("--manual", nargs="?", const="*", metavar="플랫폼", help="data/상품목록.xlsx 의 대기 중인 첫 줄로 영상 제작 (naver / coupang / etc 로 시트 지정, 생략하면 전체)")
+    ap.add_argument("--row", type=int, help="--manual 과 함께: 상태와 상관없이 시트의 이 줄 번호로 제작")
     ap.add_argument("--upload-last", action="store_true", help="방금 렌더링한 영상(output/last_render.json)을 업로드하고 수동 상품 시트 상태를 갱신")
+    ap.add_argument("--set", action="append", default=[], metavar="번호=문장", help="대본의 N번째 문장(1부터)을 통째로 교체 (예: --set \"3=흡연하는 사람이라면 필수 꿀템이야.\"). 생성/재사용 모두 가능")
     ap.add_argument("--reuse-script", action="store_true", help="새 대본을 만들지 않고 직전 대본(output/result_*)을 재사용 (문장만 고쳐 다시 렌더링할 때)")
     ap.add_argument("--replace", action="append", default=[], metavar="원문=>수정문", help="--reuse-script 와 함께: 대본 문장/제목의 일부를 바꾼다 (여러 번 지정 가능)")
     ap.add_argument("--bgm", help="BGM 파일 경로 (기본: assets/ 안 mp3 중 무작위)")
@@ -816,6 +846,8 @@ def main():
     args = ap.parse_args()
 
     FFMPEG, FFPROBE = find_tool("ffmpeg"), find_tool("ffprobe")
+    housekeeping.tidy()                              # 1일 이상 업로드하지 않은 영상은 '미업로드' 폴더로
+    atexit.register(housekeeping.reminder)           # 실행이 끝날 때 미업로드 영상 리마인드
     if args.upload_last:
         info = json.loads((OUT_DIR / "last_render.json").read_text(encoding="utf-8"))
         from uploader import upload_from_result
@@ -886,7 +918,7 @@ def main():
     platform = "알리"
     manual_row = None
     if args.manual:
-        manual_row = manual_queue.next_pending(args.manual)
+        manual_row = manual_queue.next_pending(args.manual, args.row)
         if not manual_row:
             sys.exit("[안내] 대기 중인 상품이 없습니다. data/상품목록.xlsx 에 상품명과 제휴 링크를 채우고 상태는 비워두거나 '대기'로 두세요.")
         platform = manual_row["platform"]
@@ -899,6 +931,11 @@ def main():
             sys.exit("[중단] 네이버 시트의 제휴 링크가 쇼핑 커넥트 전용 링크(naver.me/...)가 아닙니다. 상품 페이지 주소를 그대로 쓰면 실적으로 인정되지 않습니다.")
         print(f"[수동] {manual_row['sheet']} 시트 {manual_row['row']}행 {manual_row['name'][:50]} / {manual_row['link']}")
     args.platform = PLATFORM = platform
+    NOTICE = manual_row["notice"] if manual_row else ""
+    EXTRA_NOTES = list(manual_row.get("extra_notes", [])) if manual_row else []
+    if manual_row and platform == "네이버" and not NOTICE:      # 네이버 쇼핑 커넥트 영상은 항상: 브랜드와 무관한 개인 콘텐츠/개인 의견 명시
+        NOTICE = manual_queue.default_brand_notice(manual_row["name"])
+        print(f"  [면책 문구 자동] {NOTICE}")
     DISCLOSURE_SHORT, DISCLOSURE = manual_queue.disclosure_for(platform)
 
     if args.ali_url:
@@ -927,20 +964,39 @@ def main():
             sys.exit(f"[오류] 대본 생성 실패: {e}\n  (다른 상품용 샘플 대본으로 대체하지 않고 중단합니다)")
     if not args.reuse_script:
         data = normalize_script(data)
+    if manual_row and manual_row.get("script_lines"):    # 소재 폴더의 _대본.txt: 직접 쓴 대본으로 통째 교체
+        lines = [re.sub(r"[,，、]", " ", l) for l in manual_row["script_lines"]]       # 쉼표는 TTS 끊김 때문에 공백으로
+        lines = [re.sub(r"([!?])\.+$", r"\1", re.sub(r"\s+", " ", l)).strip() for l in lines]     # "UP!." 같은 중복 문장부호 정리
+        if len(lines) != len(data["sentences"]):
+            sys.exit(f"[오류] _대본.txt 는 {len(data['sentences'])}줄이어야 합니다 (현재 {len(lines)}줄)")
+        data["sentences"] = lines
+        if manual_row.get("title_override"):
+            data["title"] = manual_row["title_override"]
+        text_all = " ".join(lines)
+        kws = [k for k in manual_row.get("keywords", []) if k in text_all]
+        if kws:
+            data["keywords"] = kws
+        print("  [직접 대본] _대본.txt 를 사용합니다.")
+    for s in args.set:                               # --set "N=문장": N번째 문장 통째로 교체
+        num, _, text = s.partition("=")
+        idx = int(num) - 1
+        if not (0 <= idx < len(data["sentences"])) or not text.strip():
+            sys.exit(f"[오류] --set 형식이 올바르지 않습니다: {s} (번호는 1~{len(data['sentences'])})")
+        data["sentences"][idx] = text.strip()
     if args.link:
         data["pinned_comment"] = data["pinned_comment"].replace(PLACEHOLDER, args.link)
     save_result_text(data)
     (OUT_DIR / "result_meta.json").write_text(json.dumps({     # uploader.py가 읽는 메타데이터
         "concept": concept["key"], "concept_name": concept["name"], "hook": data["sentences"][0], "title": data["title"], "headline": data.get("headline", ""),
         "keywords": data["keywords"], "hashtags": data["hashtags"], "pinned_comment": data["pinned_comment"],
-        "platform": platform, "disclosure": DISCLOSURE, "link": args.link or "", "product_id": product["product_id"] if product else "",
+        "platform": platform, "disclosure": DISCLOSURE, "notice": NOTICE, "extra_notes": EXTRA_NOTES, "link": args.link or "", "product_id": product["product_id"] if product else "",
         "product_name": product["name"] if product else args.name,
         "image": (product["images"][0] if product and product.get("images") else (args.image_url or [""])[0]),
     }, ensure_ascii=False, indent=2), encoding="utf-8")
     for s in data["sentences"]:
         print("  -", s)
 
-    print(f"2) 음성 생성 (귀차니스트 마멋 보이스: {VOICE} {PITCH} {RATE})")
+    print(f"2) 음성 생성 (마멋선생 보이스: {VOICE} {PITCH} {RATE})")
     spoken = data["sentences"]                    # 인사말 없이 첫 문장부터 훅으로 진입
     audio, durs, words = synth_audio(spoken)
     print(f"  음성 길이 {sum(durs):.1f}s ({len(spoken)}문장)")
@@ -983,9 +1039,9 @@ def main():
         bgm = None
     payload = build_remotion_data(data, spoken, durs, audio, media, bgm, args.image_url or [],
                        video=product.get("video_path") if product else None, words=words, badge=concept["badge"],
-                       broll_clips=broll.pick(concept["key"], 3 if (product and product.get("video_path")) else 6, classify_sub(full_name, concept["key"])),
+                       broll_clips=broll.pick(concept["key"], 4 if (product and product.get("video_path")) else 8, classify_sub(full_name, concept["key"])),
                        hero=bool(broll.list_clips("_mascot")),          # 마멋 AI 훅 영상은 상품 영상 유무와 상관없이 첫 컷에 쓴다
-                       concept_key=concept["key"])
+                       concept_key=concept["key"], product_name=full_name, plain_images=bool(product and product.get("manual")))     # 수동 소재(공식 이미지/스크린샷)는 확대·크롭 없이 원본 그대로
     print(f"  저장: {REMOTION_DATA}")
 
     print("4) Remotion 렌더링 (npx remotion render)")
@@ -1000,6 +1056,7 @@ def main():
     meta = json.loads(meta_file.read_text(encoding="utf-8"))
     meta["log_md"] = str(log_path)
     meta_file.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    out.with_name(out.stem + ".meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")   # 영상별 업로드 정보 (다음 영상을 만들어도 덮어쓰이지 않는다)
 
     if args.upload:
         from uploader import upload_from_result

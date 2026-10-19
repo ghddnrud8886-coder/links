@@ -12,23 +12,22 @@ const KEN_BURNS = [
 
 /**
  * 상품 이미지 카드. 카드 틀은 고정(등장할 때만 살짝 튀어오름)하고 안쪽 사진이 Ken Burns 로 천천히 움직인다.
+ * 한 컷에 이미지가 여러 장이면(srcs) 컷 길이를 균등하게 나눠 차례로 보여준다.
  * 다음 컷은 CROSSFADE 프레임 동안 위에서 페이드인하므로 이미지 슬라이드쇼에서도 부드럽게 교차된다.
  */
 export const ProductCard: React.FC<{
-  src: string;
+  srcs: string[];
   frames: number;
   index: number;
   crop?: boolean; // 대표 이미지 하단의 배송/프로모션 배너를 프레임 밖으로 밀어낸다
-}> = ({ src, frames, index, crop }) => {
+  plain?: boolean; // 원본 그대로: 크롭/확대/이동 없이 전체가 보이게 (변형 금지 이미지/스크린샷)
+}> = ({ srcs, frames, index, crop, plain }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
   const pop = spring({ frame, fps, config: { damping: 15, stiffness: 130 } });
   const fade = interpolate(frame, [0, CROSSFADE], [0, 1], { extrapolateRight: "clamp" });
-  const kb = KEN_BURNS[index % KEN_BURNS.length];
-  const t = Math.min(1, frame / Math.max(1, frames + CROSSFADE));
-  const ease = t * t * (3 - 2 * t); // smoothstep
-  const lerp = (a: number, b: number) => a + (b - a) * ease;
-  const base = crop ? 1.15 : 1;
+  const total = frames + CROSSFADE;
+  const seg = total / srcs.length;
   return (
     <div
       style={{
@@ -38,14 +37,32 @@ export const ProductCard: React.FC<{
         boxShadow: "0 0 0 4px rgba(150,215,255,0.75), 0 0 60px rgba(120,160,255,0.8), 0 0 140px rgba(160,100,255,0.55), 0 40px 90px rgba(0,0,0,0.6)",
       }}
     >
-      <Img
-        src={resolve(src)}
-        style={{
-          width: "100%", height: "100%", objectFit: "cover",
-          transformOrigin: crop ? "10% 0%" : "50% 50%",
-          transform: `translate(${lerp(kb.x0, kb.x1)}%, ${lerp(kb.y0, kb.y1)}%) scale(${base * lerp(kb.s0, kb.s1)})`,
-        }}
-      />
+      {srcs.map((src, k) => {
+        const start = k * seg;
+        const opacity = k === 0 ? 1 : interpolate(frame, [start, start + 6], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
+        if (plain) {
+          return (
+            <Img key={k} src={resolve(src)} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain", background: "#fff", opacity }} />
+          );
+        }
+        const kb = KEN_BURNS[(index + k) % KEN_BURNS.length];
+        const t = Math.min(1, Math.max(0, (frame - start) / Math.max(1, seg)));
+        const ease = t * t * (3 - 2 * t); // smoothstep
+        const lerp = (a: number, b: number) => a + (b - a) * ease;
+        const useCrop = crop && k === 0;
+        const base = useCrop ? 1.15 : 1;
+        return (
+          <Img
+            key={k}
+            src={resolve(src)}
+            style={{
+              position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", opacity,
+              transformOrigin: useCrop ? "10% 0%" : "50% 50%",
+              transform: `translate(${lerp(kb.x0, kb.x1)}%, ${lerp(kb.y0, kb.y1)}%) scale(${base * lerp(kb.s0, kb.s1)})`,
+            }}
+          />
+        );
+      })}
     </div>
   );
 };

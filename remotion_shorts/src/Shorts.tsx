@@ -87,7 +87,7 @@ const HookTitle: React.FC<{ title: string; headline?: string; badge?: string }> 
           boxShadow: `0 0 24px ${NEON}66`, opacity: Math.min(1, pop), transform: `scale(${pop})`,
         }}
       >
-        {badge || "마멋의 귀차니즘 꿀템"}
+        {badge || "쇼핑천재 마멋선생의 꿀템 추천"}
       </div>
       {/* 훅 박스: 진한 노란 배경 + 검정 Black 글씨 + 네온 외곽 글로우 */}
       <div
@@ -163,45 +163,74 @@ const DemoVideo: React.FC<{ src: string; info?: VideoInfo | null; trim: number; 
 };
 
 type Visual =
-  | { kind: "image"; src: string; crop: boolean }
+  | { kind: "image"; srcs: string[]; crop: boolean }
   | { kind: "video"; trim: number; src?: string; info?: VideoInfo | null };
 
-/** 컷별 화면 계획. 비디오가 있으면 첫 컷은 항상 비디오(훅: 이탈 방지) 이후 중간에 이미지 한 컷을 끼운다
- *  (6컷: 비디오 -> 비디오 -> 상품 이미지 줌인 -> 비디오 -> 비디오 -> 비디오),
- *  비디오 컷은 앞 컷에서 재생한 만큼 이어서 재생해 같은 장면이 반복되지 않게 한다. 비디오가 없으면 이미지만 순환. */
+/** 이미지들을 이미지 컷 수만큼 순서대로 나눈다 (한 컷에 여러 장이 차례로 나온다) */
+const splitImages = (imgs: string[], cuts: number): string[][] => {
+  const out: string[][] = Array.from({ length: cuts }, () => []);
+  imgs.forEach((s, k) => out[Math.min(cuts - 1, Math.floor((k * cuts) / imgs.length))].push(s));
+  return out;
+};
+
+/** 컷별 화면 계획.
+ *  - 상품 영상 없음 + b-roll: 마멋 훅 컷 이후 상품 이미지 컷과 상황 b-roll 컷을 번갈아 (8컷: M I B I B I B I)
+ *  - 상품 영상 + b-roll: 마멋 영상 시연 이미지 b-roll 시연 이미지 b-roll 시연 ... (3컷 주기)
+ *  - 그 외(b-roll 없음): 예전 방식(비디오 위주, 중간에 이미지 한 컷)
+ *  이미지가 여러 장이면 이미지 컷들에 나눠 담고, 한 컷 안에서도 차례로 보여준다. */
 const planVisuals = (data: ShortsData, frames: number[]): (Visual | null)[] => {
   const n = frames.length;
   const imgs = data.images;
+  const imageCutMap = (positions: number[]) => {
+    const groups = splitImages(imgs, positions.length);
+    const map = new Map<number, string[]>();
+    positions.forEach((p, k) => map.set(p, groups[k]));
+    return map;
+  };
   if (!data.video && data.broll?.length) {
-    // 상품 영상이 없으면: 상황 b-roll 과 상품 이미지(Ken Burns)를 번갈아 (6컷: B I I B I B)
+    const table = n >= 8
+      ? ({ 0: [], 1: [1], 2: [1, 5], 3: [1, 3, 5], 4: [1, 3, 5, 7] } as Record<number, number[]>)
+      : ({ 0: [], 1: [1], 2: [1, 4], 3: [1, 2, 4] } as Record<number, number[]>);
+    const kc = Math.min(n >= 8 ? 4 : 3, imgs.length);
+    const byCut = imageCutMap(table[kc]);
     let bi = 0;
-    let ii = 0;
+    let firstImage = true;
     return frames.map((_, i) => {
-      // 이미지 컷은 가진 이미지 수만큼만 (1장이면 1컷, 같은 사진 반복 금지): 우선순위 1번 컷 -> 4번 컷 -> 2번 컷
-      const imageSlots = [1, 4, 2].slice(0, Math.min(3, imgs.length));
-      const useImage = imageSlots.includes(i);
-      if (useImage) {
-        const crop = ii === 0;
-        return { kind: "image", src: imgs[ii++ % imgs.length], crop };
+      const g = byCut.get(i);
+      if (g) {
+        const crop = firstImage;
+        firstImage = false;
+        return { kind: "image", srcs: g, crop };
       }
-      return { kind: "video", trim: 0, src: data.broll![bi++ % data.broll!.length], info: null };
+      const first = bi === 0 && !!data.heroFirst;
+      const src = data.broll![bi++ % data.broll!.length];
+      return { kind: "video", trim: first ? Math.round((data.heroTrim ?? 0) * FPS) : 0, src, info: null };
     });
   }
   if (!data.video) {
-    return frames.map((_, i) => (imgs.length ? { kind: "image", src: imgs[i % imgs.length], crop: i === 0 } : null));
+    return frames.map((_, i) => (imgs.length ? { kind: "image", srcs: [imgs[i % imgs.length]], crop: i === 0 } : null));
   }
-  const mixBroll = !!data.broll?.length && n >= 6; // 상품 영상 + b-roll 혼합. 마멋 훅이 있으면: 마멋 영상 이미지 b-roll 영상 b-roll, 없으면: 영상 영상 이미지 b-roll 영상 b-roll
-  const kinds: ("image" | "video" | "broll")[] = mixBroll
-    ? frames.map((_, i) => (i === 2 ? (imgs.length ? "image" : "broll") : i === 0 && !data.heroFirst ? "video" : i === 0 || i === 3 || i === 5 ? "broll" : "video"))
-    : imgs.length === 0
-      ? frames.map(() => "video")
-      : n >= 5
-        ? frames.map((_, i) => (i === 2 ? "image" : "video"))
-        : frames.map((_, i) => (i === 0 || i === n - 1 || i % 2 === 1 ? "video" : "image"));
+  const mixBroll = !!data.broll?.length && n >= 6;
+  let kinds: ("image" | "video" | "broll")[];
+  if (mixBroll) {
+    kinds = frames.map((_, i) => {
+      if (i === 0) return data.heroFirst ? "broll" : "video";
+      const r = i % 3;
+      return r === 1 ? "video" : r === 2 ? (imgs.length ? "image" : "broll") : "broll";
+    });
+  } else if (imgs.length === 0) {
+    kinds = frames.map(() => "video");
+  } else if (n >= 5) {
+    kinds = frames.map((_, i) => (i === 2 ? "image" : "video"));
+  } else {
+    kinds = frames.map((_, i) => (i === 0 || i === n - 1 || i % 2 === 1 ? "video" : "image"));
+  }
+  const imagePositions = kinds.map((k, i) => (k === "image" ? i : -1)).filter((p) => p >= 0);
+  const byCut = imageCutMap(imagePositions);
   let brollIdx = 0;
   const skip = Math.round((data.videoSkip ?? 2) * FPS);
   const srcFrames = Math.floor((data.videoInfo?.duration ?? 0) * FPS);
-  let imageIdx = 0;
+  let firstImage = true;
   let cursor = skip;
   return kinds.map((k, i) => {
     if (k === "broll") {
@@ -210,9 +239,9 @@ const planVisuals = (data: ShortsData, frames: number[]): (Visual | null)[] => {
       return { kind: "video", trim: first ? Math.round((data.heroTrim ?? 0) * FPS) : 0, src, info: null };
     }
     if (k === "image") {
-      const crop = imageIdx === 0; // 대표 이미지(하단 배송 배너)를 처음 쓸 때만 크롭
-      const src = imgs[imageIdx++ % imgs.length];
-      return { kind: "image", src, crop };
+      const crop = firstImage; // 대표 이미지(하단 배송 배너)를 처음 쓸 때만 크롭
+      firstImage = false;
+      return { kind: "image", srcs: byCut.get(i) ?? [], crop };
     }
     const need = frames[i] + CROSSFADE;
     if (srcFrames && cursor + need > srcFrames) cursor = skip; // 원본이 모자라면 처음(스킵 이후)부터 다시
@@ -307,7 +336,7 @@ export const Shorts: React.FC<{ data: ShortsData }> = ({ data }) => {
               // 다음 컷이 위에서 페이드인하는 동안 이전 컷이 깔려 있도록 CROSSFADE만큼 연장
               <Sequence from={t.start} durationInFrames={frames + (isLast ? 0 : CROSSFADE)} layout="none">
                 {vis.kind === "image" ? (
-                  <ProductCard src={vis.src} frames={frames} index={i} crop={vis.crop} />
+                  <ProductCard srcs={vis.srcs} frames={frames} index={i} crop={vis.crop && !data.plainImages} plain={!!data.plainImages} />
                 ) : (
                   <DemoVideo src={vis.src ?? (data.video as string)} info={vis.src ? vis.info : data.videoInfo} trim={vis.trim} frames={frames} hook={i === 0} />
                 )}
@@ -334,12 +363,24 @@ export const Shorts: React.FC<{ data: ShortsData }> = ({ data }) => {
         // 대가성 문구: 메인 카드 아래, 마멋 오른쪽의 빈 줄. 시청에 방해되지 않게 작고 흐리게
         <div
           style={{
-            position: "absolute", left: 250, right: 40, top: 1392, height: 40, display: "flex", alignItems: "center",
+            position: "absolute", left: 250, right: 40, top: data.notice ? 1386 : 1392, height: 34, display: "flex", alignItems: "center",
             justifyContent: "flex-end", fontFamily: FONT, fontWeight: 700, fontSize: 25, color: "rgba(255,255,255,0.72)",
             textShadow: "0 2px 6px rgba(0,0,0,0.9)", letterSpacing: -0.5, textAlign: "right",
           }}
         >
           ※ {data.disclosure}
+        </div>
+      ) : null}
+      {data.notice ? (
+        // 추가 면책 문구(예: 브랜드와 무관한 개인 콘텐츠): 대가성 문구 바로 아래, 같은 스타일
+        <div
+          style={{
+            position: "absolute", left: 40, right: 40, top: 1418, height: 34, display: "flex", alignItems: "center",
+            justifyContent: "flex-end", fontFamily: FONT, fontWeight: 700, fontSize: 23, color: "rgba(255,255,255,0.72)",
+            textShadow: "0 2px 6px rgba(0,0,0,0.9)", letterSpacing: -0.5, textAlign: "right",
+          }}
+        >
+          ※ {data.notice}
         </div>
       ) : null}
 

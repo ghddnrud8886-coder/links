@@ -41,7 +41,7 @@ SCOPES = [
     "https://www.googleapis.com/auth/youtube.force-ssl",  # 댓글 작성
 ]
 PLACEHOLDER = "(여기에 제휴 링크 입력)"
-DEFAULT_TAGS_COMMON = ["쇼츠", "Shorts", "귀차니스트", "가성비"]
+DEFAULT_TAGS_COMMON = ["쇼츠", "Shorts", "마멋선생", "쇼핑천재", "가성비"]
 # 플랫폼별 태그/해시태그/대가성 문구는 manual_queue.py 에서 관리 (알리: 기본값)
 from manual_queue import PLATFORM_TAGS
 MAX_TITLE = 100
@@ -124,6 +124,8 @@ def build_description(meta: dict, link: str) -> str:
     lines = [meta.get("hook", ""), meta.get("headline", "")]
     lines += ["", "👉 제품 링크는 채널 프로필의 링크에서 확인하세요.",
               "※ " + (meta.get("disclosure") or "이 게시물은 제휴 마케팅 활동의 일환으로, 구매 시 일정 수수료를 지급받을 수 있습니다."),
+              *(["※ " + meta["notice"]] if meta.get("notice") else []),
+              *["※ " + t for t in meta.get("extra_notes", [])],
               "", " ".join(dict.fromkeys(hashtags))]
     return "\n".join(l for i, l in enumerate(lines) if l or i >= 2).strip()
 
@@ -232,8 +234,13 @@ def upload_from_result(video: Path, result_txt: Path | None = None, privacy: str
                        publish: bool = True) -> str:
     """main.py 호환 진입점. meta_path 가 없으면 result_txt 와 같은 폴더의 result_meta.json 을 쓴다."""
     privacy = privacy or DEFAULT_PRIVACY
+    video_meta = Path(video).with_name(Path(video).stem + ".meta.json")      # 영상별 정보가 있으면 그것을 우선 (다른 영상 정보로 올라가는 사고 방지)
+    if meta_path is None and video_meta.exists():
+        meta_path = video_meta
     meta_path = meta_path or (Path(result_txt).with_name("result_meta.json") if result_txt
                               else ROOT / "output" / "result_meta.json")
+    if meta_path.name == "result_meta.json":
+        print("  [주의] 영상별 정보 파일이 없어 '마지막으로 렌더링한 영상'의 정보(result_meta.json)를 사용합니다. 제목/링크가 맞는지 확인하세요.")
     meta = load_meta(meta_path, Path(result_txt) if result_txt else None)
     link = link or meta.get("link", "")
     title, description = build_title(meta), build_description(meta, link)
@@ -293,7 +300,7 @@ if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser(description="이미 만든 영상을 YouTube Shorts로 업로드")
     ap.add_argument("--video", default=str(ROOT / "output" / "shorts_remotion.mp4"))
-    ap.add_argument("--meta", default=str(ROOT / "output" / "result_meta.json"), help="main.py가 남긴 메타데이터 JSON")
+    ap.add_argument("--meta", default=None, help="메타데이터 JSON (생략하면 <영상 이름>.meta.json, 없으면 output/result_meta.json)")
     ap.add_argument("--text", default=str(ROOT / "output" / "result_text.txt"))
     ap.add_argument("--privacy", default=None, choices=["private", "unlisted", "public"],
                     help=f"공개 범위 (기본 {DEFAULT_PRIVACY}, 코드 상단 DEFAULT_PRIVACY 로 변경)")
@@ -301,4 +308,4 @@ if __name__ == "__main__":
     ap.add_argument("--no-publish", action="store_true", help="댓글 등록 후에도 공개 전환하지 않고 업로드 때의 공개 범위 유지")
     ap.add_argument("--dry-run", action="store_true", help="인증/업로드 없이 제목·설명·태그·댓글만 출력")
     a = ap.parse_args()
-    print(upload_from_result(Path(a.video), Path(a.text), a.privacy, a.link, a.dry_run, Path(a.meta), not a.no_publish))
+    print(upload_from_result(Path(a.video), Path(a.text), a.privacy, a.link, a.dry_run, Path(a.meta) if a.meta else None, not a.no_publish))

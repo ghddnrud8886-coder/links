@@ -20,11 +20,15 @@ export type ShortsData = {
   /** 상황 컷용 b-roll 영상(public/ 파일명들). 상품 영상이 없을 때 훅/팁 컷에 쓴다 */
   broll?: string[];
   /** broll[0] 이 마멋선생 영상(훅 컷)이면 true: 그 컷 동안 우하단 2D 마멋을 숨긴다 */
+  /** true 면 상품 이미지를 확대·크롭·모션 없이 원본 그대로(contain) 보여준다 (변형 금지 이미지/스크린샷용) */
+  plainImages?: boolean;
   heroFirst?: boolean;
   /** 마멋 훅 영상을 이 초부터 재생(앞부분 정지 구간 건너뛰기) */
   heroTrim?: number;
   /** 영상 안에 작게 넣는 대가성(제휴) 문구 */
   disclosure?: string;
+  /** 추가 면책 문구(브랜드 허락 조건 등). 대가성 문구 아래 두 번째 줄로 표시 */
+  notice?: string;
   /** 마멋선생 캐릭터(public/ 파일명, 투명 PNG). 없으면 null */
   marmot?: string | null;
   /** 문장별 마멋 표정 이미지(public/ 파일명, 문장 수와 같은 길이). 있으면 marmot 대신 문장마다 교체 */
