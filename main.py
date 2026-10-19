@@ -23,6 +23,7 @@ import requests
 from dotenv import load_dotenv
 
 import broll
+import manual_queue
 from concepts import classify, classify_sub
 
 ROOT = Path(__file__).resolve().parent
@@ -54,6 +55,12 @@ CTA_POOL = [
 ]
 # 훅 컷에 쓸 마멋 영상 분위기(assets/broll/_mascot/<calm|intense>/): 일상 공감형은 차분한 컷, 활동·취미형은 강렬한 컷
 MASCOT_TONE = {"lazy": "calm", "desk": "calm", "camp": "intense", "sport": "intense", "hobby": "intense"}
+CTA_NAVER = [      # 네이버 클립은 상품 태그, 유튜브는 프로필 링크: 둘 다 안내
+    "마음에 들면 아래 상품 태그나 프로필 링크에서 직접 확인해봐.",
+    "궁금하면 상품 태그나 프로필 링크에서 어떤지 직접 보고 가.",
+    "써보고 싶으면 상품 태그나 프로필 링크에서 한번 둘러봐.",
+]
+PLATFORM = "알리"        # main()에서 현재 영상의 플랫폼으로 설정 (CTA 문구 선택용)
 CTA_NEUTRAL = [
     "마음에 들면 프로필 링크에서 직접 확인해봐.",
     "써보고 싶으면 프로필 링크 남겨둘 테니까 한번 봐봐.",
@@ -68,6 +75,7 @@ COLOR_RE = re.compile(r"(빨간|파란|노란|초록|검은|검정|하얀|흰|�
 HEALTH_RE = re.compile(r"치과|치료|예방|살균|염증|통증|질환|건강|의사|완치|효과가 (좋|입증)")   # 의학적 효능 주장 금지
 PRICE_RE = re.compile(r"원대|\d\s*원|[만천]\s*원|\d\s*%|퍼센트|할인율|\d{5,}")   # 구체적 가격/할인율 언급 금지
 OLD_MAN = re.compile(r"자네|라네|보게나|하게나|말이지|말이야|이 말이")   # 이전 노신사 말투: 나오면 재생성
+DISCLOSURE_SHORT = "제휴 마케팅 활동의 일환으로 수수료를 받을 수 있습니다"      # 영상 안에 작게 넣는 문구(플랫폼별로 main 에서 교체)
 DISCLOSURE = "이 게시물은 제휴 마케팅 활동의 일환으로, 구매 시 일정 수수료를 지급받을 수 있습니다."
 MEDIA_EXT = {".jpg", ".jpeg", ".png", ".webp", ".mp4", ".mov"}
 VIDEO_EXT = {".mp4", ".mov"}
@@ -158,14 +166,14 @@ def pick_lines():
 
 
 def is_fixed(x: str) -> bool:
-    return any(x.replace(" ", "") == f.replace(" ", "") for f in CTA_POOL + CTA_NEUTRAL)
+    return any(x.replace(" ", "") == f.replace(" ", "") for f in CTA_POOL + CTA_NEUTRAL + CTA_NAVER)
 
 
 def generate_script(api_key: str, name: str, features: str, concept: dict | None = None) -> dict:
     from concepts import DEFAULT
     concept = concept or DEFAULT
     global LAST_LINE
-    LAST_LINE = random.choice(CTA_POOL if concept["key"] == "lazy" else CTA_NEUTRAL)
+    LAST_LINE = random.choice(CTA_NAVER if PLATFORM == "네이버" else (CTA_POOL if concept["key"] == "lazy" else CTA_NEUTRAL))
     hook_examples = " / ".join(f'"{h}"' for h in concept["hooks"])
     prompt = f"""너는 쇼츠 채널 '마멋선생'의 대본 작가다. 마멋은 만사 귀찮아하는 프로 귀차니스트 마멋이고, 좋은 물건을 덤덤하고 찰지게 추천하는 찐친 같은 캐릭터다. 귀차니스트 설정은 말투의 결(덤덤하고 힘 뺀 어조)로만 깔고, 내용에서 억지로 "귀찮다"를 반복하지는 않는다.
 
@@ -403,7 +411,7 @@ def normalize_script(d: dict) -> dict:
     sents = [s for s in sents if s and not is_fixed(s)]
     sents = sents[:5] + [LAST_LINE]   # 훅 + 핵심 기능 + 추가 장점 + 활용 팁 + 호기심 + CTA
     tags = [t if t.startswith("#") else "#" + t for t in d.get("hashtags", [])][:5]
-    comment = f"🔥 초특가 링크: {PLACEHOLDER}\n{DISCLOSURE}"      # 모델 문구 대신 고정 형식 (링크는 main에서 치환)
+    comment = f"{DISCLOSURE}\n🔗 상품 링크: {PLACEHOLDER}"      # 대가성 문구를 맨 앞줄에 (고정 댓글에서 잘리지 않게)      # 모델 문구 대신 고정 형식 (링크는 main에서 치환)
     text = " ".join(sents)
     kws = [k.strip() for k in d.get("keywords", []) if isinstance(k, str) and k.strip() and k.strip() in text][:4]
     if not kws:   # 모델이 키워드를 못 줬으면 숫자가 든 단어를 노란색 강조 대상으로 사용
@@ -687,6 +695,7 @@ def build_remotion_data(data: dict, sentences: list[str], durs: list[float], aud
         "broll": broll_names,
         "brollSources": [str(c.relative_to(ROOT)) for c in (broll_clips or [])],
         "heroFirst": bool(hero and broll_clips),
+        "disclosure": DISCLOSURE_SHORT,
         "heroTrim": hero_trim,
         "videoInfo": video_info,
         "tail": TAIL,
@@ -737,11 +746,23 @@ def write_work_log(data: dict, product: dict | None, args, concept: dict, full_n
     path = LOG_DIR / f"{out.stem}.md"        # 영상 파일명과 같은 이름
     sub = classify_sub(full_name, concept["key"]) or "-"
     used_video = bool(payload.get("video"))
+    clip_lines: list[str] = []
+    if getattr(args, "platform", "") == "네이버":       # 네이버 클립은 API 업로드가 없어 앱에서 직접 올린다: 복사해서 쓸 텍스트
+        clip_lines = [
+            "## 네이버 클립 게시용 (앱에서 직접 업로드)",
+            "- 본문 첫 부분에 아래 문구를 그대로 넣고, 쇼핑 커넥트 상품 태그/스티커를 연결하세요 (2025.12~ 태그 시 [광고]가 자동 표시됨).",
+            f"  - 본문 첫 줄: {DISCLOSURE}",
+            f"  - 본문: {data['title']} {' '.join(data['hashtags'])}",
+            "- 첫 번째 고정 댓글(문구가 잘리지 않게 맨 위):",
+            f"  - {DISCLOSURE}",
+            f"  - {args.link}",
+            "- 네이버TV로 올릴 경우에는 제목에 [광고]를 넣어야 합니다.", "",
+        ]
     lines = [
         f"# {path.stem}", "",
         "## 상품",
         f"- 상품명: {full_name}",
-        f"- 알리 상품 ID: {product['product_id'] if product else '-'}",
+        f"- 플랫폼: {getattr(args, 'platform', '알리')} / 상품 ID: {product['product_id'] if product else '-'}",
         f"- 제휴 링크: {args.link or '-'}",
         f"- 콘셉트: {concept['name']} / b-roll 유형: {sub}", "",
         "## 영상",
@@ -757,6 +778,7 @@ def write_work_log(data: dict, product: dict | None, args, concept: dict, full_n
         "## 업로드용",
         f"- 해시태그: {' '.join(data['hashtags'])}",
         f"- 고정 댓글: {data['pinned_comment'].splitlines()[0] if data['pinned_comment'] else ''}", "",
+        *clip_lines,
         "## 업로드 결과",
         "- (아직 업로드 전)", "",
         "## 메모", "-", "",
@@ -767,7 +789,7 @@ def write_work_log(data: dict, product: dict | None, args, concept: dict, full_n
 
 # ───────────────────────── main ─────────────────────────
 def main():
-    global FFMPEG, FFPROBE
+    global FFMPEG, FFPROBE, DISCLOSURE, DISCLOSURE_SHORT, PLATFORM
     ap = argparse.ArgumentParser()
     ap.add_argument("--name", default="케이블 일체형 10000mAh 소형 보조배터리")
     ap.add_argument("--features", default="10000mAh 대용량, 케이블 내장, 초소형 경량, 아이폰/갤럭시 호환")
@@ -782,6 +804,8 @@ def main():
     ap.add_argument("--rank", type=int, help="--csv 사용 시 엑셀 N위 상품을 필터 없이 직접 지정 (생략하면 자동 선별)")
     ap.add_argument("--ali-url", help="알리익스프레스 상품 URL (sample_images에 소재 다운로드)")
     ap.add_argument("--image-url", action="append", help="상품 이미지 URL (여러 번 지정 가능, 지정 시 sample_images보다 앞에 사용)")
+    ap.add_argument("--manual", nargs="?", const="*", metavar="플랫폼", help="data/상품목록.xlsx 의 대기 중인 첫 줄로 영상 제작 (naver / coupang / etc 로 시트 지정, 생략하면 전체)")
+    ap.add_argument("--upload-last", action="store_true", help="방금 렌더링한 영상(output/last_render.json)을 업로드하고 수동 상품 시트 상태를 갱신")
     ap.add_argument("--reuse-script", action="store_true", help="새 대본을 만들지 않고 직전 대본(output/result_*)을 재사용 (문장만 고쳐 다시 렌더링할 때)")
     ap.add_argument("--replace", action="append", default=[], metavar="원문=>수정문", help="--reuse-script 와 함께: 대본 문장/제목의 일부를 바꾼다 (여러 번 지정 가능)")
     ap.add_argument("--bgm", help="BGM 파일 경로 (기본: assets/ 안 mp3 중 무작위)")
@@ -792,6 +816,15 @@ def main():
     args = ap.parse_args()
 
     FFMPEG, FFPROBE = find_tool("ffmpeg"), find_tool("ffprobe")
+    if args.upload_last:
+        info = json.loads((OUT_DIR / "last_render.json").read_text(encoding="utf-8"))
+        from uploader import upload_from_result
+        print(f"YouTube 업로드: {info['video']}")
+        url = upload_from_result(Path(info["video"]), OUT_DIR / "result_text.txt", args.privacy, args.link)
+        print(f"업로드 완료: {url}")
+        if info.get("manual_row"):
+            manual_queue.mark(info["manual_sheet"], info["manual_row"], "완료", url)
+        return
     api_key = ensure_env()
     OUT_DIR.mkdir(exist_ok=True)
     WORK_DIR.mkdir(parents=True, exist_ok=True)
@@ -801,7 +834,6 @@ def main():
     product = None
     finished = {"ok": False}        # 렌더링 성공 전에 죽으면 예약(used)을 풀어준다
     if args.csv:
-        from concepts import classify
         from ali_csv_loader import (check_affiliate_link, download_gallery, load_products, product_features, rank_candidates,
                                     priority_hits, top_product)
         from ali_trend_collector import _load_history, mark_used, release_used
@@ -851,6 +883,24 @@ def main():
         args.link = args.link or product["affiliate_link"]
         print(f"[엑셀] {args.rank}위: {product['name'][:50]} / {product['price']} / {product['affiliate_link']}")
 
+    platform = "알리"
+    manual_row = None
+    if args.manual:
+        manual_row = manual_queue.next_pending(args.manual)
+        if not manual_row:
+            sys.exit("[안내] 대기 중인 상품이 없습니다. data/상품목록.xlsx 에 상품명과 제휴 링크를 채우고 상태는 비워두거나 '대기'로 두세요.")
+        platform = manual_row["platform"]
+        product = {"product_id": f"manual-{time.strftime('%y%m%d')}-r{manual_row['row']}", "name": manual_row["name"], "manual": True,
+                   "affiliate_link": manual_row["link"], "price": "", "images": [str(p) for p in manual_row["images"]], "image": ""}
+        args.name = manual_row["name"][:80]
+        args.features = manual_row["features"] or "(특징 미입력: 상품명에 있는 정보만 사용)"
+        args.link = args.link or manual_row["link"]
+        if platform == "네이버" and "naver.me" not in args.link:
+            sys.exit("[중단] 네이버 시트의 제휴 링크가 쇼핑 커넥트 전용 링크(naver.me/...)가 아닙니다. 상품 페이지 주소를 그대로 쓰면 실적으로 인정되지 않습니다.")
+        print(f"[수동] {manual_row['sheet']} 시트 {manual_row['row']}행 {manual_row['name'][:50]} / {manual_row['link']}")
+    args.platform = PLATFORM = platform
+    DISCLOSURE_SHORT, DISCLOSURE = manual_queue.disclosure_for(platform)
+
     if args.ali_url:
         from ali_downloader import download_product_media
         n = download_product_media(args.ali_url, SAMPLE_DIR / "ali")
@@ -883,7 +933,7 @@ def main():
     (OUT_DIR / "result_meta.json").write_text(json.dumps({     # uploader.py가 읽는 메타데이터
         "concept": concept["key"], "concept_name": concept["name"], "hook": data["sentences"][0], "title": data["title"], "headline": data.get("headline", ""),
         "keywords": data["keywords"], "hashtags": data["hashtags"], "pinned_comment": data["pinned_comment"],
-        "link": args.link or "", "product_id": product["product_id"] if product else "",
+        "platform": platform, "disclosure": DISCLOSURE, "link": args.link or "", "product_id": product["product_id"] if product else "",
         "product_name": product["name"] if product else args.name,
         "image": (product["images"][0] if product and product.get("images") else (args.image_url or [""])[0]),
     }, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -896,7 +946,15 @@ def main():
     print(f"  음성 길이 {sum(durs):.1f}s ({len(spoken)}문장)")
 
     print("3) Remotion 데이터 생성")
-    if product:
+    if product and product.get("manual"):
+        video = manual_row["videos"][0] if manual_row["videos"] else None
+        if video:
+            product["video_path"] = video
+        media = [Path(p) for p in product["images"]]
+        print(f"  수동 소재: 이미지 {len(media)}장 / 영상 {'있음' if video else '없음'} ({manual_row['media_dir']})")
+        if not (video or media or broll.list_clips(concept["key"])):
+            sys.exit(f"[오류] 소재가 없습니다. 이미지나 mp4 를 {manual_row['media_dir']} 에 넣어주세요.")
+    elif product:
         from ali_csv_loader import download_gallery
         from ali_csv_loader import download_video
         video = download_video(product, WORK_DIR / "product_video.mp4")       # 엑셀 Video Url 을 그대로 내려받는다
@@ -925,7 +983,7 @@ def main():
         bgm = None
     payload = build_remotion_data(data, spoken, durs, audio, media, bgm, args.image_url or [],
                        video=product.get("video_path") if product else None, words=words, badge=concept["badge"],
-                       broll_clips=broll.pick(concept["key"], 3 if (product and product.get("video_path")) else 4, classify_sub(full_name, concept["key"])),
+                       broll_clips=broll.pick(concept["key"], 3 if (product and product.get("video_path")) else 6, classify_sub(full_name, concept["key"])),
                        hero=bool(broll.list_clips("_mascot")),          # 마멋 AI 훅 영상은 상품 영상 유무와 상관없이 첫 컷에 쓴다
                        concept_key=concept["key"])
     print(f"  저장: {REMOTION_DATA}")
@@ -934,6 +992,8 @@ def main():
     out = render_remotion(OUT_DIR / (args.out or f"{work_stem(data, full_name)}.mp4"))
     print(f"완료: {out}  ({duration(out):.1f}s)")
     finished["ok"] = True                  # 렌더링 성공: 예약 유지 (업로드 성공 시 uploader가 상세 이력을 추가 기록)
+    (OUT_DIR / "last_render.json").write_text(json.dumps(
+        {"video": str(out), "manual_row": manual_row["row"] if manual_row else None, "manual_sheet": manual_row["sheet"] if manual_row else None}, ensure_ascii=False), encoding="utf-8")
     log_path = write_work_log(data, product, args, concept, full_name, payload, out)
     print(f"작업 기록: {log_path.relative_to(ROOT)}")
     meta_file = OUT_DIR / "result_meta.json"
@@ -946,6 +1006,10 @@ def main():
         print("5) YouTube 업로드")
         url = upload_from_result(out, OUT_DIR / "result_text.txt", args.privacy, args.link)
         print(f"업로드 완료: {url}")
+        if manual_row:
+            manual_queue.mark(manual_row["sheet"], manual_row["row"], "완료", url)
+    elif manual_row:
+        manual_queue.mark(manual_row["sheet"], manual_row["row"], "렌더링됨")
 
 
 if __name__ == "__main__":

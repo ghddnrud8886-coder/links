@@ -5,7 +5,7 @@
 !/*.py
 !/README.md
 !/requirements.txt
-!/run_2shorts.bat
+!/run_*.bat
 
 # Remotion 프로젝트: 소스 코드와 설정만
 !/remotion_shorts/

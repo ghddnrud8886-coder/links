@@ -41,9 +41,11 @@ SCOPES = [
     "https://www.googleapis.com/auth/youtube.force-ssl",  # 댓글 작성
 ]
 PLACEHOLDER = "(여기에 제휴 링크 입력)"
-DEFAULT_TAGS = ["알리익스프레스", "알리꿀템", "꿀템추천", "쇼츠", "Shorts", "귀차니스트", "가성비"]
-FIXED_HASHTAGS = ["#Shorts", "#알리익스프레스"]
+DEFAULT_TAGS_COMMON = ["쇼츠", "Shorts", "귀차니스트", "가성비"]
+# 플랫폼별 태그/해시태그/대가성 문구는 manual_queue.py 에서 관리 (알리: 기본값)
+from manual_queue import PLATFORM_TAGS
 MAX_TITLE = 100
+AD_TITLE_PLATFORMS = {"네이버"}          # 제목 앞에 [광고]를 붙이고 '유료 광고 포함' 표시를 거는 플랫폼
 # 공개 범위 기본값. 비공개(private) 영상에는 YouTube가 댓글 작성을 막아(403) 제휴 링크 댓글이 달리지 않는다.
 # 실전 배포 시 이 한 줄만 "public" 으로 바꾸면 대중에게 공개 업로드된다.
 DEFAULT_PRIVACY = "unlisted"
@@ -98,12 +100,15 @@ def build_title(meta: dict) -> str:
     hook = (meta.get("title") or meta.get("hook", "")).strip()
     headline = (meta.get("headline") or "").strip()
     head = f"{headline} | {hook}" if headline and hook else (headline or hook)     # 검색에 걸리도록 상품 키워드를 앞에
+    if meta.get("platform") in AD_TITLE_PLATFORMS:         # 네이버 쇼핑 커넥트: 제목 내 '광고' 표시 (유튜브 정책 + 브랜드 커넥트 가이드)
+        head = f"[광고] {head}"
     return head if len(head) <= MAX_TITLE else f"{head[:MAX_TITLE - 1]}…"
 
 
 def build_tags(meta: dict) -> list[str]:
     """업로드 태그: 상품 해시태그 + 키워드 + 기본 태그 (중복 제거, 전체 450자 이내)."""
-    raw = [t.lstrip("#") for t in meta.get("hashtags", [])] + list(meta.get("keywords", [])) + [meta.get("concept_name", "")] + DEFAULT_TAGS
+    plat_tags = PLATFORM_TAGS.get(meta.get("platform", "알리"), PLATFORM_TAGS["알리"])[0]
+    raw = [t.lstrip("#") for t in meta.get("hashtags", [])] + list(meta.get("keywords", [])) + [meta.get("concept_name", "")] + plat_tags + DEFAULT_TAGS_COMMON
     tags, total = [], 0
     for t in dict.fromkeys(x.strip() for x in raw if x.strip()):
         if total + len(t) + 1 > 450:
@@ -114,10 +119,11 @@ def build_tags(meta: dict) -> list[str]:
 
 
 def build_description(meta: dict, link: str) -> str:
-    hashtags = [t for t in meta.get("hashtags", []) if t.lower() != "#shorts"][:3] + FIXED_HASHTAGS
+    plat = meta.get("platform", "알리")
+    hashtags = [t for t in meta.get("hashtags", []) if t.lower() != "#shorts"][:3] + ["#Shorts"] + PLATFORM_TAGS.get(plat, PLATFORM_TAGS["알리"])[1]
     lines = [meta.get("hook", ""), meta.get("headline", "")]
     lines += ["", "👉 제품 링크는 채널 프로필의 링크에서 확인하세요.",
-              "※ 이 게시물은 제휴 마케팅 활동의 일환으로, 구매 시 일정 수수료를 지급받을 수 있습니다.",
+              "※ " + (meta.get("disclosure") or "이 게시물은 제휴 마케팅 활동의 일환으로, 구매 시 일정 수수료를 지급받을 수 있습니다."),
               "", " ".join(dict.fromkeys(hashtags))]
     return "\n".join(l for i, l in enumerate(lines) if l or i >= 2).strip()
 
@@ -128,7 +134,7 @@ def build_comment(meta: dict, link: str) -> str:
 
 
 # ───────────────────────── 업로드 / 댓글 ─────────────────────────
-def upload_video(youtube, video: Path, title: str, description: str, tags: list[str], privacy: str) -> str:
+def upload_video(youtube, video: Path, title: str, description: str, tags: list[str], privacy: str, paid_promo: bool = False) -> str:
     from googleapiclient.http import MediaFileUpload
 
     body = {
@@ -142,13 +148,28 @@ def upload_video(youtube, video: Path, title: str, description: str, tags: list[
         "status": {"privacyStatus": privacy, "selfDeclaredMadeForKids": False},
     }
     media = MediaFileUpload(str(video), mimetype="video/mp4", chunksize=8 * 1024 * 1024, resumable=True)
-    req = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
-    resp = None
-    while resp is None:
-        status, resp = req.next_chunk()
-        if status:
-            print(f"  업로드 {int(status.progress() * 100)}%")
-    return resp["id"]
+    part = "snippet,status"
+    if paid_promo:       # '유료 광고 포함' 뱃지 (영상 시작 시 표시). 지원하지 않는 경우 제목의 [광고] 표시만으로 진행한다
+        body["paidProductPlacementDetails"] = {"hasPaidProductPlacement": True}
+        part += ",paidProductPlacementDetails"
+    for attempt in (1, 2):
+        req = youtube.videos().insert(part=part, body=body, media_body=media)
+        resp = None
+        try:
+            while resp is None:
+                status, resp = req.next_chunk()
+                if status:
+                    print(f"  업로드 {int(status.progress() * 100)}%")
+            if paid_promo and attempt == 1:
+                print("  '유료 광고 포함' 뱃지 적용 요청 완료")
+            return resp["id"]
+        except Exception as e:
+            if not (paid_promo and attempt == 1):
+                raise
+            print(f"  [경고] '유료 광고 포함' 뱃지 설정 실패({type(e).__name__}) → 제목의 [광고] 표시로만 진행합니다")
+            body.pop("paidProductPlacementDetails", None)
+            part = "snippet,status"
+            media = MediaFileUpload(str(video), mimetype="video/mp4", chunksize=8 * 1024 * 1024, resumable=True)
 
 
 def post_comment(youtube, video_id: str, text: str) -> str:
@@ -225,7 +246,7 @@ def upload_from_result(video: Path, result_txt: Path | None = None, privacy: str
         raise SystemExit("[중단] 제휴 링크가 없습니다. --link \"https://...\" 로 지정하거나 result_meta.json 의 link 를 채우세요.")
 
     youtube = get_service()
-    video_id = upload_video(youtube, video, title, description, tags, privacy)
+    video_id = upload_video(youtube, video, title, description, tags, privacy, paid_promo=meta.get("platform") in AD_TITLE_PLATFORMS)
     print(f"  Video ID: {video_id}")
     url = f"https://youtu.be/{video_id}"
 

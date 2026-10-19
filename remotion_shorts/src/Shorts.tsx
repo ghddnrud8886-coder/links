@@ -177,7 +177,9 @@ const planVisuals = (data: ShortsData, frames: number[]): (Visual | null)[] => {
     let bi = 0;
     let ii = 0;
     return frames.map((_, i) => {
-      const useImage = imgs.length > 0 && (i === 1 || i === 2 || i === 4);
+      // 이미지 컷은 가진 이미지 수만큼만 (1장이면 1컷, 같은 사진 반복 금지): 우선순위 1번 컷 -> 4번 컷 -> 2번 컷
+      const imageSlots = [1, 4, 2].slice(0, Math.min(3, imgs.length));
+      const useImage = imageSlots.includes(i);
       if (useImage) {
         const crop = ii === 0;
         return { kind: "image", src: imgs[ii++ % imgs.length], crop };
@@ -326,6 +328,19 @@ export const Shorts: React.FC<{ data: ShortsData }> = ({ data }) => {
           narrationFrames={narrationFrames}
           hideUntil={data.heroFirst && timings[1] ? timings[1].start : 0}
         />
+      ) : null}
+
+      {data.disclosure ? (
+        // 대가성 문구: 메인 카드 아래, 마멋 오른쪽의 빈 줄. 시청에 방해되지 않게 작고 흐리게
+        <div
+          style={{
+            position: "absolute", left: 250, right: 40, top: 1392, height: 40, display: "flex", alignItems: "center",
+            justifyContent: "flex-end", fontFamily: FONT, fontWeight: 700, fontSize: 25, color: "rgba(255,255,255,0.72)",
+            textShadow: "0 2px 6px rgba(0,0,0,0.9)", letterSpacing: -0.5, textAlign: "right",
+          }}
+        >
+          ※ {data.disclosure}
+        </div>
       ) : null}
 
       {data.voice ? <Audio src={staticFile(data.voice)} /> : null}

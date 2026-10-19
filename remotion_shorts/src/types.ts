@@ -23,6 +23,8 @@ export type ShortsData = {
   heroFirst?: boolean;
   /** 마멋 훅 영상을 이 초부터 재생(앞부분 정지 구간 건너뛰기) */
   heroTrim?: number;
+  /** 영상 안에 작게 넣는 대가성(제휴) 문구 */
+  disclosure?: string;
   /** 마멋선생 캐릭터(public/ 파일명, 투명 PNG). 없으면 null */
   marmot?: string | null;
   /** 문장별 마멋 표정 이미지(public/ 파일명, 문장 수와 같은 길이). 있으면 marmot 대신 문장마다 교체 */
