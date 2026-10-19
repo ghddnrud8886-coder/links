@@ -1,0 +1,8 @@
+edge-tts
+requests
+python-dotenv
+Pillow
+google-api-python-client
+google-auth-oauthlib
+numpy
+scipy

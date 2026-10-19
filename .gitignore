@@ -1,3 +1,19 @@
+# 기본은 전부 제외하고, 코드와 링크 페이지만 추적한다 (.env, token.json, client_secrets*, data/, assets/, output/, 영상 등은 제외)
 /*
 !/docs/
 !/.gitignore
+!/*.py
+!/README.md
+!/requirements.txt
+!/run_2shorts.bat
+
+# Remotion 프로젝트: 소스 코드와 설정만
+!/remotion_shorts/
+/remotion_shorts/*
+!/remotion_shorts/src/
+!/remotion_shorts/package.json
+!/remotion_shorts/package-lock.json
+!/remotion_shorts/remotion.config.ts
+!/remotion_shorts/tsconfig.json
+/remotion_shorts/src/data.json
+__pycache__/
