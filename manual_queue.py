@@ -10,13 +10,17 @@
   _사용.txt(사용할 이미지와 순서) _면책문구.txt(영상/설명/댓글에 들어가는 면책 문구. 네이버는 없으면 자동 생성) _추가안내.txt(설명/댓글에만 들어가는 안내, 예: 혜택 기간)
 - 이미지/영상은 data/수동상품_미디어/<시트 이름>/<줄번호>/ 에 넣는다 (jpg/png/webp 와 mp4). '이미지 폴더'에 다른 경로를 적어도 된다.
 """
+import re
 import argparse
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 XLSX = ROOT / "data" / "상품목록.xlsx"
 MEDIA_ROOT = ROOT / "data" / "수동상품_미디어"
-HEADERS = ["상태", "상품명", "특징", "제휴 링크", "상품 페이지", "이미지 폴더", "결과 URL", "메모"]
+HEADERS = ["상태", "상품명", "특징", "제휴 링크", "상품 페이지", "이미지 폴더", "결과 URL", "메모", "이미지 사용 허가"]
+# '이미지 사용 허가' 열 값: 제품 회사/판매자에게 상세 페이지 이미지 사용 여부를 문의한 결과를 기록한다 (비어 있으면 '미확인')
+IMAGE_PERMISSIONS = ["미확인", "문의 중", "타부서 연결", "허가", "조건부 허가", "공식 배포 이미지", "불가"]
+IMAGE_OK = {"허가", "조건부 허가", "공식 배포 이미지"}
 SHEETS = ["네이버", "쿠팡", "기타"]
 ALIASES = {"naver": "네이버", "coupang": "쿠팡", "etc": "기타", "네이버": "네이버", "쿠팡": "쿠팡", "기타": "기타"}
 STATES = ["대기", "완료", "렌더링됨", "건너뜀"]
@@ -84,12 +88,15 @@ def init_template() -> Path:
             c.font = Font(bold=True, color="FFFFFF")
             c.fill = PatternFill("solid", fgColor="3B2F8F")
             c.alignment = Alignment(horizontal="center")
-        for col, w in zip("ABCDEFGH", (10, 38, 40, 34, 34, 28, 34, 30)):
+        for col, w in zip("ABCDEFGHI", (10, 38, 40, 34, 34, 28, 34, 30, 18)):
             ws.column_dimensions[col].width = w
         ws.freeze_panes = "A2"
         dv = DataValidation(type="list", formula1='"' + ",".join(["예시"] + STATES) + '"', allow_blank=True)
         ws.add_data_validation(dv)
         dv.add("A2:A500")
+        dv2 = DataValidation(type="list", formula1='"' + ",".join(IMAGE_PERMISSIONS) + '"', allow_blank=True)
+        ws.add_data_validation(dv2)
+        dv2.add("I2:I500")
     wb.save(XLSX)
     return XLSX
 
@@ -115,6 +122,21 @@ def _find_media_dir(sheet: str, row: int, custom: str, name: str) -> Path:
     return by_row
 
 
+def _nested_images(media: Path, min_side: int = 500) -> list[Path]:
+    """하위 폴더까지 뒤져 쓸 만한 이미지(짧은 변 500px 이상, gif 제외)를 이름 순으로 돌려준다. 아이콘/배너 조각은 걸러진다."""
+    from PIL import Image
+    out = []
+    for f in sorted((p for p in media.rglob("*") if p.is_file() and p.suffix.lower() in IMG_EXT),
+                    key=lambda p: [int(x) if x.isdigit() else x.lower() for x in re.split(r"(\d+)", str(p))]):
+        try:
+            with Image.open(f) as im:
+                if min(im.size) >= min_side:
+                    out.append(f)
+        except OSError:
+            continue
+    return out
+
+
 def next_pending(platform: str | None = None, row: int | None = None) -> dict | None:
     """상태가 비어 있거나 '대기'이고 상품명/제휴 링크가 있는 첫 줄 (platform 이 없으면 시트 순서대로 전체)."""
     from openpyxl import load_workbook
@@ -137,6 +159,8 @@ def next_pending(platform: str | None = None, row: int | None = None) -> dict | 
                 continue
             media = _find_media_dir(ws.title, i, r["이미지 폴더"], r["상품명"])
             files = sorted(media.glob("*")) if media.exists() else []
+            if media.exists() and not any(f.suffix.lower() in IMG_EXT for f in files):
+                files = _nested_images(media)              # '웹페이지 저장'처럼 하위 폴더 안에 이미지가 있는 경우
             use_file = media / "_사용.txt"            # 사용할 이미지와 순서를 직접 지정 (줄마다 파일명 또는 파일명 일부)
             if use_file.exists():
                 wanted = [l.strip() for l in use_file.read_text(encoding="utf-8").splitlines() if l.strip() and not l.startswith("#")]
@@ -154,6 +178,7 @@ def next_pending(platform: str | None = None, row: int | None = None) -> dict | 
                 "extra_notes": _lines("_추가안내.txt"),
                 "script_lines": _lines("_대본.txt"), "title_override": (_lines("_제목.txt") or [""])[0], "keywords": _lines("_강조.txt"),
                 "videos": [f for f in files if f.suffix.lower() == ".mp4"],
+                "image_permission": r.get("이미지 사용 허가", "") or "미확인",
             }
     return None
 

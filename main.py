@@ -964,6 +964,12 @@ def main():
         if not manual_row:
             sys.exit("[안내] 대기 중인 상품이 없습니다. data/상품목록.xlsx 에 상품명과 제휴 링크를 채우고 상태는 비워두거나 '대기'로 두세요.")
         platform = manual_row["platform"]
+        perm = manual_row.get("image_permission", "미확인")
+        if perm == "불가":                       # 판매자/제품 회사가 상세 이미지 사용을 거절한 상품: 이미지 없이 b-roll/마멋만으로 만든다
+            print("  [이미지 사용 불가] 엑셀의 '이미지 사용 허가'가 '불가'라서 폴더의 이미지를 쓰지 않습니다.")
+            manual_row["images"] = []
+        elif perm not in manual_queue.IMAGE_OK:
+            print(f"  [주의] 이미지 사용 허가가 '{perm}' 상태입니다. 상세 페이지 이미지는 허가가 확인된 뒤에만 업로드하세요.")
         product = {"product_id": f"manual-{time.strftime('%y%m%d')}-r{manual_row['row']}", "name": manual_row["name"], "manual": True,
                    "affiliate_link": manual_row["link"], "price": "", "images": [str(p) for p in manual_row["images"]], "image": ""}
         args.name = manual_row["name"][:80]
