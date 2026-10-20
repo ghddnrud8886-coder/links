@@ -93,6 +93,8 @@ def pick(key: str, n: int, sub: str = "") -> list[Path]:
     rest = [c for c in allc if c not in mine]
     random.shuffle(mine)
     random.shuffle(rest)
+    if mine or (sub and (BROLL_DIR / key / sub).exists()):   # 상품 유형 폴더가 있으면 그 안의 클립만 쓴다(없거나 모자라면 컷 수를 줄이고 상품 사진으로 채운다). 다른 유형 클립을 억지로 섞지 않는다
+        return mine[:n]
     chosen = (mine + rest)[:n]
     while len(chosen) < n:
         chosen.append(chosen[len(chosen) % len(allc)])

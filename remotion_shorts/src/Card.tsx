@@ -42,7 +42,11 @@ export const ProductCard: React.FC<{
         const opacity = k === 0 ? 1 : interpolate(frame, [start, start + 6], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
         if (plain) {
           return (
-            <Img key={k} src={resolve(src)} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain", background: "#fff", opacity }} />
+            // 원본 비율을 그대로 보여주고(contain), 남는 자리는 같은 이미지를 흐리게 깔아 채운다 (흰/검은 띠가 생기지 않게)
+            <div key={k} style={{ position: "absolute", inset: 0, opacity, overflow: "hidden", background: "#111" }}>
+              <Img src={resolve(src)} style={{ position: "absolute", inset: -40, width: "calc(100% + 80px)", height: "calc(100% + 80px)", objectFit: "cover", filter: "blur(36px) brightness(0.75)" }} />
+              <Img src={resolve(src)} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }} />
+            </div>
           );
         }
         const kb = KEN_BURNS[(index + k) % KEN_BURNS.length];

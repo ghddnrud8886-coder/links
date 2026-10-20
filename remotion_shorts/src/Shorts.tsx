@@ -203,6 +203,26 @@ const planVisuals = (data: ShortsData, frames: number[]): (Visual | null)[] => {
     positions.forEach((p, k) => map.set(p, groups[k]));
     return map;
   };
+  if (!data.video && data.broll?.length && data.broll.length < (n >= 8 ? 4 : 3) && imgs.length >= 3) {
+    // 상품에 맞는 b-roll 이 모자라면(다른 유형 영상을 억지로 쓰지 않고) 그만큼 상품 사진 컷을 늘린다
+    const nb = data.broll.length;
+    const bPos = nb === 1 ? [0] : nb === 2 ? [0, Math.floor(n / 2)] : [0, Math.floor(n / 3), Math.floor((2 * n) / 3)];
+    const imgPos = frames.map((_, i) => i).filter((i) => !bPos.includes(i));
+    const byCut = imageCutMap(imgPos);
+    let bi = 0;
+    let firstImage = true;
+    return frames.map((_, i) => {
+      const g = byCut.get(i);
+      if (g) {
+        const crop = firstImage;
+        firstImage = false;
+        return { kind: "image", srcs: g, crop };
+      }
+      const first = bi === 0 && !!data.heroFirst;
+      const src = data.broll![bi++ % data.broll!.length];
+      return { kind: "video", trim: first ? Math.round((data.heroTrim ?? 0) * FPS) : 0, src, info: null };
+    });
+  }
   if (!data.video && data.broll?.length) {
     const table = n >= 8
       ? ({ 0: [], 1: [1], 2: [1, 5], 3: [1, 3, 5], 4: [1, 3, 5, 7] } as Record<number, number[]>)

@@ -137,6 +137,48 @@ def _nested_images(media: Path, min_side: int = 500) -> list[Path]:
     return out
 
 
+def _sections(path: Path, media: Path) -> list[Path]:
+    """세로로 아주 긴 상세페이지 이미지를 내용이 끊기는 지점(빈 줄)에서 정사각형에 가까운 구간으로 나눈다.
+    결과는 <소재 폴더>/_섹션/ 에 저장해 두고 다시 만들지 않는다. 길지 않은 이미지는 그대로 돌려준다."""
+    from PIL import Image
+    try:
+        with Image.open(path) as im:
+            w, h = im.size
+            if h <= w * 1.6:
+                return [path]
+            out_dir = media / "_섹션"
+            existing = sorted(out_dir.glob(f"{path.stem}__s*.jpg"))
+            if existing:
+                return existing
+            out_dir.mkdir(exist_ok=True)
+            gray = im.convert("L").resize((min(w, 200), h))
+            px = gray.load()
+            gw = gray.size[0]
+            blank = []
+            for y in range(h):
+                row = [px[x, y] for x in range(0, gw, 2)]
+                blank.append(max(row) - min(row) < 14)         # 한 가지 색으로 비어 있는 줄
+            cuts, y = [0], 0
+            while h - y > w * 1.5:
+                lo, hi = y + int(w * 0.5), y + int(w * 1.4)
+                cand = [c for c in range(lo, min(hi, h - int(w * 0.3))) if all(blank[c:c + 12 if c + 12 <= h else h])]
+                nxt = min(cand, key=lambda c: abs(c - (y + w))) if cand else y + int(w * 1.1)
+                cuts.append(nxt)
+                y = nxt
+            cuts.append(h)
+            rgb = im.convert("RGB")
+            res = []
+            for k, (a, b) in enumerate(zip(cuts, cuts[1:]), start=1):
+                if b - a < w * 0.5:                              # 너무 얇은 조각(아이콘 줄 등)은 버린다
+                    continue
+                p = out_dir / f"{path.stem}__s{k:02d}.jpg"
+                rgb.crop((0, a, w, b)).save(p, quality=95)
+                res.append(p)
+            return res or [path]
+    except OSError:
+        return [path]
+
+
 def next_pending(platform: str | None = None, row: int | None = None) -> dict | None:
     """상태가 비어 있거나 '대기'이고 상품명/제휴 링크가 있는 첫 줄 (platform 이 없으면 시트 순서대로 전체)."""
     from openpyxl import load_workbook
@@ -165,8 +207,9 @@ def next_pending(platform: str | None = None, row: int | None = None) -> dict | 
             if use_file.exists():
                 wanted = [l.strip() for l in use_file.read_text(encoding="utf-8").splitlines() if l.strip() and not l.startswith("#")]
                 pool = files + [f for f in sorted(media.rglob("*")) if f.is_file() and f not in files]      # 하위 폴더의 파일도 이름으로 찾는다
-                files = [next((f for f in pool if w in f.name), None) for w in wanted]
+                files = [next((f for f in pool if w in f.name and "_섹션" not in str(f)), None) for w in wanted]
                 files = [f for f in files if f]
+                files = [g for f in files for g in (_sections(f, media) if f.suffix.lower() in IMG_EXT else [f])]
             def _lines(name: str) -> list[str]:       # 소재 폴더의 텍스트 파일(# 주석 제외)
                 fp = media / name
                 return [l.strip() for l in fp.read_text(encoding="utf-8").splitlines() if l.strip() and not l.startswith("#")] if fp.exists() else []
@@ -175,7 +218,7 @@ def next_pending(platform: str | None = None, row: int | None = None) -> dict | 
             return {
                 "sheet": ws.title, "row": i, "platform": ws.title, "name": r["상품명"], "features": r["특징"],
                 "link": r["제휴 링크"], "page": r["상품 페이지"], "media_dir": media,
-                "images": [f for f in files if f.suffix.lower() in IMG_EXT], "notice": notice,
+                "images": [g for f in files if f.suffix.lower() in IMG_EXT for g in _sections(f, media)], "notice": notice,
                 "extra_notes": _lines("_추가안내.txt"),
                 "script_lines": _lines("_대본.txt"), "title_override": (_lines("_제목.txt") or [""])[0], "keywords": _lines("_강조.txt"),
                 "videos": [f for f in files if f.suffix.lower() == ".mp4"],

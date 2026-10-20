@@ -696,7 +696,7 @@ def build_remotion_data(data: dict, sentences: list[str], durs: list[float], aud
             if d.is_dir() and d.name in product_name:        # 상품 전용 마멋 훅 영상 (폴더 이름이 상품명에 들어 있으면)
                 specific += sorted(p for p in d.glob("*.mp4") if broll.clip_duration(p) >= broll.MIN_USE_DUR)
         hero_clip = random.choice(specific) if specific else broll.pick("_mascot", 1, MASCOT_TONE.get(concept_key, "calm"))[0]
-        broll_clips = [hero_clip] + list(broll_clips)[:-1]
+        broll_clips = [hero_clip] + (list(broll_clips)[:-1] if len(broll_clips) >= 4 else list(broll_clips))     # 클립이 넉넉할 때만 마지막 하나를 덜어 컷 수를 맞춘다
         off = broll.BROLL_DIR / "_mascot" / "offsets.json"      # 클립별 훅 시작 지점(초): 가만히 서 있는 앞부분을 건너뛴다
         if off.exists():
             hero_trim = float(json.loads(off.read_text(encoding="utf-8")).get(broll_clips[0].name, 0))
