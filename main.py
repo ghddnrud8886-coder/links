@@ -689,7 +689,8 @@ def build_remotion_data(data: dict, sentences: list[str], durs: list[float], aud
                       "duration": float(j["format"]["duration"])}
     broll_names = []
     hero_trim = 0.0
-    if hero and broll_clips:                 # 마멋선생 AI 영상을 훅 컷(첫 컷)에 쓴다
+    if hero:                                 # 마멋선생 AI 영상을 훅 컷(첫 컷)에 쓴다 (상품에 맞는 b-roll 이 하나도 없어도 훅은 쓴다)
+        broll_clips = list(broll_clips or [])
         specific: list[Path] = []
         spec_root = broll.BROLL_DIR / "_mascot" / "specific"
         for d in (sorted(spec_root.glob("*")) if spec_root.exists() else []):
