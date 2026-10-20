@@ -29,7 +29,7 @@ CSV_PATH = DATA_DIR / "hot_products.csv"
 HISTORY_PATH = DATA_DIR / "trend_history.json"
 
 GATEWAY = "https://api-sg.aliexpress.com/sync"
-METHOD = "aliexpress.affiliate.hotproduct.query"
+METHOD = "aliexpress.affiliate.product.query"   # hotproduct.query 는 별도 권한이 필요해 product.query(주문량순 정렬)를 사용
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 
 # 1단계 카테고리 ID. 어필리에이트 포털/aliexpress.affiliate.category.get 으로 최신 값을 확인해 수정하세요.
@@ -156,7 +156,7 @@ def parse_api_response(j: dict) -> list[dict]:
     if "error_response" in j:
         e = j["error_response"]
         raise RuntimeError(f"AliExpress API 오류: {e.get('code')} {e.get('msg')}")
-    body = j.get("aliexpress_affiliate_hotproduct_query_response", {}).get("resp_result", {})
+    body = (j.get("aliexpress_affiliate_product_query_response") or j.get("aliexpress_affiliate_hotproduct_query_response") or {}).get("resp_result", {})
     if str(body.get("resp_code")) != "200":
         raise RuntimeError(f"AliExpress API 응답 코드 {body.get('resp_code')}: {body.get('resp_msg')}")
     items = body.get("result", {}).get("products", {}).get("product", [])
@@ -179,11 +179,16 @@ def parse_api_response(j: dict) -> list[dict]:
             "volume": p.get("lastest_volume", ""),
             "category": p.get("first_level_category_name", ""),
             "source": "api",
+            "video": p.get("product_video_url", ""),
         })
     return out
 
 
-def query_api(category: str, page_no: int = 1, page_size: int = 20) -> list[dict]:
+def query_api_keyword(keyword: str, page_size: int = 20) -> list[dict]:
+    return query_api("", 1, page_size, keyword=keyword)
+
+
+def query_api(category: str, page_no: int = 1, page_size: int = 20, keyword: str = "") -> list[dict]:
     cat_id = CATEGORIES.get(category, category if category.isdigit() else "")
     params = {
         "app_key": os.environ["ALI_APP_KEY"].strip(),
@@ -201,6 +206,8 @@ def query_api(category: str, page_no: int = 1, page_size: int = 20) -> list[dict
     }
     if cat_id:
         params["category_ids"] = cat_id
+    if keyword:
+        params["keywords"] = keyword
     params["sign"] = sign_params(params, os.environ["ALI_APP_SECRET"].strip())
     r = requests.post(GATEWAY, data=params, headers={"User-Agent": UA}, timeout=(10, 30))
     r.raise_for_status()

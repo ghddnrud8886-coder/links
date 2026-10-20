@@ -37,6 +37,8 @@ export type ShortsData = {
   badge?: string;
   /** 상단 문구를 3초 이후 교체할 상품 핵심 솔루션 요약 */
   headline?: string;
+  /** 실험: true 면 비디오 컷을 화면 전체(풀블리드)로 채우고 첫 프레임부터 또렷하게 시작한다 */
+  fullBleed?: boolean;
   /** 마지막 문장 이후 여운(초) */
   tail: number;
 };

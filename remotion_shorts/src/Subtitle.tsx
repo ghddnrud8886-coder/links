@@ -88,7 +88,7 @@ export const SentenceSubtitle: React.FC<{
   return (
     <div
       style={{
-        position: "absolute", left: 0, right: 0, top: lines.length >= 3 ? 1462 : 1450, height: lines.length >= 3 ? 176 : 190,   // 하단 UI(채널명/구독/제목) 안전지대: 블록 하단이 화면 아래에서 280px
+        position: "absolute", zIndex: 5, left: 0, right: 0, top: lines.length >= 3 ? 1462 : 1450, height: lines.length >= 3 ? 176 : 190,   // 하단 UI(채널명/구독/제목) 안전지대: 블록 하단이 화면 아래에서 280px
         display: "flex", flexDirection: "column", alignItems: "center", justifyContent: lines.length >= 3 ? "flex-start" : "center",
         gap: size * 0.12, opacity: Math.min(1, enter * 1.6),
         transform: `translateY(${(1 - enter) * 24}px)`,

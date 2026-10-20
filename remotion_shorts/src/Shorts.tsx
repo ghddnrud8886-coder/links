@@ -127,27 +127,28 @@ const Clip: React.FC<{ src: string; trim: number; fit: "cover" | "contain" }> = 
 );
 
 /** 시연 비디오 컷: trim 프레임부터 재생(알리 영상 앞 로고 구간 스킵) */
-const DemoVideo: React.FC<{ src: string; info?: VideoInfo | null; trim: number; frames: number; hook?: boolean }> = ({
-  src, info, trim, frames, hook,
+const DemoVideo: React.FC<{ src: string; info?: VideoInfo | null; trim: number; frames: number; hook?: boolean; full?: boolean }> = ({
+  src, info, trim, frames, hook, full,
 }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
   const pop = spring({ frame, fps, config: { damping: 15, stiffness: 110 } });
-  const fade = interpolate(frame, [0, CROSSFADE], [0, 1], { extrapolateRight: "clamp" });
+  const fade = full && hook ? 1 : interpolate(frame, [0, CROSSFADE], [0, 1], { extrapolateRight: "clamp" });
   const landscape = !!info && info.width / info.height > 1.2;
   // 컷 내내 천천히 밀고 들어가는 푸시인 + (훅 컷만) 시작 순간 확 줄어드는 펀치인, 시작 프레임 화이트 플래시
   const push = 1 + 0.06 * Math.min(1, frame / Math.max(1, frames));
   const punch = hook ? interpolate(frame, [0, 9], [1.16, 1], { extrapolateRight: "clamp" }) : 1;
-  const flash = hook ? interpolate(frame, [0, 6], [0.85, 0], { extrapolateRight: "clamp" }) : 0;
-  return (
-    <div
-      style={{
+  const flash = hook && !full ? interpolate(frame, [0, 6], [0.85, 0], { extrapolateRight: "clamp" }) : 0;
+  const box: React.CSSProperties = full
+    ? { position: "absolute", left: 0, right: 0, top: 0, bottom: 0, overflow: "hidden", background: "#000", opacity: fade }
+    : {
         position: "absolute", left: MAIN_SIDE, right: MAIN_SIDE, top: MAIN_TOP, height: MAIN_H,
         borderRadius: 56, overflow: "hidden", background: "#000",
         opacity: fade, transform: `scale(${0.96 + 0.04 * pop})`,
         boxShadow: "0 0 0 4px rgba(150,215,255,0.75), 0 0 60px rgba(120,160,255,0.8), 0 0 140px rgba(160,100,255,0.55), 0 40px 90px rgba(0,0,0,0.6)",
-      }}
-    >
+      };
+  return (
+    <div style={box}>
       {landscape && (
         // 가로 영상은 흐린 확대본으로 영역을 채우고 원본은 폭에 맞춰 선명하게 올린다 (과도한 크롭/업스케일 방지)
         <div style={{ position: "absolute", inset: -60, filter: "blur(40px) brightness(0.55)" }}>
@@ -324,7 +325,7 @@ export const Shorts: React.FC<{ data: ShortsData }> = ({ data }) => {
   return (
     <AbsoluteFill>
       <Background />
-      <HookTitle title={data.title} headline={data.headline} badge={data.badge} />
+      {!data.fullBleed && <HookTitle title={data.title} headline={data.headline} badge={data.badge} />}
 
       {timings.map((t, i) => {
         const isLast = i === timings.length - 1;
@@ -338,7 +339,7 @@ export const Shorts: React.FC<{ data: ShortsData }> = ({ data }) => {
                 {vis.kind === "image" ? (
                   <ProductCard srcs={vis.srcs} frames={frames} index={i} crop={vis.crop && !data.plainImages} plain={!!data.plainImages} />
                 ) : (
-                  <DemoVideo src={vis.src ?? (data.video as string)} info={vis.src ? vis.info : data.videoInfo} trim={vis.trim} frames={frames} hook={i === 0} />
+                  <DemoVideo src={vis.src ?? (data.video as string)} info={vis.src ? vis.info : data.videoInfo} trim={vis.trim} frames={frames} hook={i === 0} full={!!data.fullBleed} />
                 )}
               </Sequence>
             )}
@@ -350,20 +351,32 @@ export const Shorts: React.FC<{ data: ShortsData }> = ({ data }) => {
         );
       })}
 
+      {data.fullBleed && (
+        <>
+          <div style={{ position: "absolute", zIndex: 1, left: 0, right: 0, top: 0, height: 700, background: "linear-gradient(180deg, rgba(0,0,0,0.55) 0%, transparent 100%)" }} />
+          <div style={{ position: "absolute", zIndex: 1, left: 0, right: 0, bottom: 0, height: 760, background: "linear-gradient(0deg, rgba(0,0,0,0.75) 0%, transparent 100%)" }} />
+          <div style={{ position: "absolute", inset: 0, zIndex: 2 }}>
+            <HookTitle title={data.title} headline={data.headline} badge={data.badge} />
+          </div>
+        </>
+      )}
+
       {marmotSrcs.length ? (
+        <div style={{ position: "absolute", inset: 0, zIndex: 3 }}>
         <Marmot
           srcs={marmotSrcs}
           starts={timings.map((t) => t.start)}
           narrationFrames={narrationFrames}
           hideUntil={data.heroFirst && timings[1] ? timings[1].start : 0}
         />
+        </div>
       ) : null}
 
       {data.disclosure ? (
         // 대가성 문구: 메인 카드 아래, 마멋 오른쪽의 빈 줄. 시청에 방해되지 않게 작고 흐리게
         <div
           style={{
-            position: "absolute", left: 250, right: 40, top: data.notice ? 1386 : 1392, height: 34, display: "flex", alignItems: "center",
+            position: "absolute", zIndex: 4, left: 250, right: 40, top: data.notice ? 1386 : 1392, height: 34, display: "flex", alignItems: "center",
             justifyContent: "flex-end", fontFamily: FONT, fontWeight: 700, fontSize: 25, color: "rgba(255,255,255,0.72)",
             textShadow: "0 2px 6px rgba(0,0,0,0.9)", letterSpacing: -0.5, textAlign: "right",
           }}
@@ -375,7 +388,7 @@ export const Shorts: React.FC<{ data: ShortsData }> = ({ data }) => {
         // 추가 면책 문구(예: 브랜드와 무관한 개인 콘텐츠): 대가성 문구 바로 아래, 같은 스타일
         <div
           style={{
-            position: "absolute", left: 40, right: 40, top: 1418, height: 34, display: "flex", alignItems: "center",
+            position: "absolute", zIndex: 4, left: 40, right: 40, top: 1418, height: 34, display: "flex", alignItems: "center",
             justifyContent: "flex-end", fontFamily: FONT, fontWeight: 700, fontSize: 23, color: "rgba(255,255,255,0.72)",
             textShadow: "0 2px 6px rgba(0,0,0,0.9)", letterSpacing: -0.5, textAlign: "right",
           }}

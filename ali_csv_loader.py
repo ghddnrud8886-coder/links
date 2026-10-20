@@ -362,3 +362,33 @@ if __name__ == "__main__":
     load_products(verbose=True)
     rank = int(sys.argv[1]) if len(sys.argv) > 1 else 1
     print(json.dumps(top_product(rank), ensure_ascii=False, indent=1))
+
+
+# 관심 가는 품목 검색어(콘셉트별 인기 꿀템). API 조회용
+API_KEYWORDS = ["캠핑 랜턴", "휴대용 선풍기", "미니 마사지건", "무선 청소기", "게이밍 마우스", "블루투스 키보드",
+                "차량용 거치대", "스마트워치", "LED 무드등", "휴대용 믹서기", "목 마사지기", "미니 프로젝터"]
+
+
+def load_products_api(keywords: list[str] | None = None, per_kw: int = 20, verbose: bool = False) -> list[dict]:
+    """Affiliate API(product.query)로 키워드별 인기 상품을 모아 엑셀 로더와 같은 형태로 돌려준다."""
+    from ali_trend_collector import query_api_keyword
+    merged: dict[str, dict] = {}
+    for kw in keywords or API_KEYWORDS:
+        try:
+            items = query_api_keyword(kw, per_kw)
+        except Exception as e:           # 한 검색어가 실패해도 나머지는 계속
+            print(f"  [경고] '{kw}' 조회 실패: {e}")
+            continue
+        if verbose:
+            print(f"  [API] {kw}: {len(items)}개")
+        for p in items:
+            if p["product_id"] in merged:
+                continue
+            merged[p["product_id"]] = {
+                "product_id": p["product_id"], "name": p["name"], "price": _won(str(p["price"])),
+                "original_price": _won(str(p["original_price"])) if p["original_price"] else "",
+                "discount": "", "sales": str(p["volume"] or 0), "feedback": "",
+                "image": p["images"][0] if p["images"] else "", "affiliate_link": p["affiliate_link"],
+                "video": p.get("video", ""), "source": "api", "images": p["images"],
+            }
+    return list(merged.values())

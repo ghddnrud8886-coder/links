@@ -655,7 +655,7 @@ def build_remotion_data(data: dict, sentences: list[str], durs: list[float], aud
                         media: list[Path], bgm: Path | None, image_urls: list[str],
                         video: Path | None = None, words: list[list[dict]] | None = None,
                         badge: str = "", broll_clips: list[Path] | None = None, hero: bool = False,
-                        concept_key: str = "", plain_images: bool = False, product_name: str = "") -> dict:
+                        concept_key: str = "", plain_images: bool = False, product_name: str = "", full_bleed: bool = False) -> dict:
     """문장별 TTS 길이(초)와 에셋을 remotion_shorts/public 으로 복사하고 src/data.json 을 기록한다."""
     REMOTION_PUBLIC.mkdir(parents=True, exist_ok=True)
     for old in REMOTION_PUBLIC.glob("*"):          # 이전 실행의 에셋 정리
@@ -718,6 +718,7 @@ def build_remotion_data(data: dict, sentences: list[str], durs: list[float], aud
         "brollSources": [str(c.relative_to(ROOT)) for c in (broll_clips or [])],
         "plainImages": plain_images,
         "heroFirst": bool(hero and broll_clips),
+        "fullBleed": full_bleed,
         "disclosure": DISCLOSURE_SHORT,
         "notice": NOTICE,
         "heroTrim": hero_trim,
@@ -823,6 +824,10 @@ def main():
     ap.add_argument("--features", default="10000mAh 대용량, 케이블 내장, 초소형 경량, 아이폰/갤럭시 호환")
     ap.add_argument("--offline", action="store_true", help="DeepSeek 호출 없이 내장 샘플 대본 사용")
     ap.add_argument("--csv", action="store_true", help="data/hot_products.xlsx(없으면 .csv)의 상위 상품으로 자동 제작")
+    ap.add_argument("--api", action="store_true", help="--csv 와 함께: 엑셀 대신 알리 Affiliate API 로 관심 품목(캠핑/마사지/게이밍 등)의 인기 상품을 조회")
+    ap.add_argument("--ignore-hold", action="store_true", help="data/upload_hold.json 의 업로드 보류를 무시하고 업로드")
+    ap.add_argument("--fullbleed", action="store_true", help="실험: 비디오 컷을 화면 전체로 채우는 풀블리드 레이아웃")
+    ap.add_argument("--no-hero", action="store_true", help="실험: 마멋 AI 훅 영상을 첫 컷에 쓰지 않고 상황 b-roll 로 시작")
     ap.add_argument("--min-price", type=int, default=5000, help="자동 선별 시 할인가 하한(원): 1~4천 원대 비닐/소모품/부속 파츠 차단")
     ap.add_argument("--max-price", type=int, default=50000, help="자동 선별 시 할인가 상한(원): 충동구매형 꿀템만 (0이면 무제한)")
     ap.add_argument("--select-only", action="store_true", help="상품 선정(필터+비디오+링크 검증)까지만 하고 종료 (예약/렌더링/업로드 없음)")
@@ -850,7 +855,9 @@ def main():
     atexit.register(housekeeping.reminder)           # 실행이 끝날 때 미업로드 영상 리마인드
     if args.upload_last:
         info = json.loads((OUT_DIR / "last_render.json").read_text(encoding="utf-8"))
-        from uploader import upload_from_result
+        from uploader import upload_from_result, upload_hold
+        if upload_hold() and not args.ignore_hold:
+            sys.exit(f"[보류] {upload_hold()}")
         print(f"YouTube 업로드: {info['video']}")
         url = upload_from_result(Path(info["video"]), OUT_DIR / "result_text.txt", args.privacy, args.link)
         print(f"업로드 완료: {url}")
@@ -869,7 +876,11 @@ def main():
         from ali_csv_loader import (check_affiliate_link, download_gallery, load_products, product_features, rank_candidates,
                                     priority_hits, top_product)
         from ali_trend_collector import _load_history, mark_used, release_used
-        pool = load_products(verbose=True)
+        if args.api:
+            from ali_csv_loader import load_products_api
+            pool = load_products_api(verbose=True)
+        else:
+            pool = load_products(verbose=True)
         used = _load_history()
         if args.rank:
             product = pool[args.rank - 1]
@@ -983,11 +994,13 @@ def main():
         if not (0 <= idx < len(data["sentences"])) or not text.strip():
             sys.exit(f"[오류] --set 형식이 올바르지 않습니다: {s} (번호는 1~{len(data['sentences'])})")
         data["sentences"][idx] = text.strip()
+        if idx == 0:                                 # 첫 문장을 바꾸면 상단 제목도 같이 맞춘다 (제목과 음성이 달라지는 것 방지)
+            data["title"] = re.sub(r"[.,]+$", "", text.strip())
     if args.link:
         data["pinned_comment"] = data["pinned_comment"].replace(PLACEHOLDER, args.link)
     save_result_text(data)
     (OUT_DIR / "result_meta.json").write_text(json.dumps({     # uploader.py가 읽는 메타데이터
-        "concept": concept["key"], "concept_name": concept["name"], "hook": data["sentences"][0], "title": data["title"], "headline": data.get("headline", ""),
+        "concept": concept["key"], "concept_name": concept["name"], "hook": data["sentences"][0], "script": data["sentences"], "title": data["title"], "headline": data.get("headline", ""),
         "keywords": data["keywords"], "hashtags": data["hashtags"], "pinned_comment": data["pinned_comment"],
         "platform": platform, "disclosure": DISCLOSURE, "notice": NOTICE, "extra_notes": EXTRA_NOTES, "link": args.link or "", "product_id": product["product_id"] if product else "",
         "product_name": product["name"] if product else args.name,
@@ -1040,8 +1053,8 @@ def main():
     payload = build_remotion_data(data, spoken, durs, audio, media, bgm, args.image_url or [],
                        video=product.get("video_path") if product else None, words=words, badge=concept["badge"],
                        broll_clips=broll.pick(concept["key"], 4 if (product and product.get("video_path")) else 8, classify_sub(full_name, concept["key"])),
-                       hero=bool(broll.list_clips("_mascot")),          # 마멋 AI 훅 영상은 상품 영상 유무와 상관없이 첫 컷에 쓴다
-                       concept_key=concept["key"], product_name=full_name, plain_images=bool(product and product.get("manual")))     # 수동 소재(공식 이미지/스크린샷)는 확대·크롭 없이 원본 그대로
+                       hero=bool(broll.list_clips("_mascot")) and not args.no_hero,          # 마멋 AI 훅 영상은 상품 영상 유무와 상관없이 첫 컷에 쓴다
+                       concept_key=concept["key"], product_name=full_name, plain_images=bool(product and product.get("manual")), full_bleed=args.fullbleed)     # 수동 소재(공식 이미지/스크린샷)는 확대·크롭 없이 원본 그대로
     print(f"  저장: {REMOTION_DATA}")
 
     print("4) Remotion 렌더링 (npx remotion render)")
@@ -1058,7 +1071,14 @@ def main():
     meta_file.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
     out.with_name(out.stem + ".meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")   # 영상별 업로드 정보 (다음 영상을 만들어도 덮어쓰이지 않는다)
 
-    if args.upload:
+    import uploader as _up
+    hold = None if args.ignore_hold else _up.upload_hold()
+    if args.upload and hold:
+        print(f"[보류] {hold}")
+        print("  영상은 output/ 에 두었습니다. 보류가 끝나면 python main.py --upload-last 로 올릴 수 있습니다.")
+        if manual_row:
+            manual_queue.mark(manual_row["sheet"], manual_row["row"], "렌더링됨")
+    elif args.upload:
         from uploader import upload_from_result
         print("5) YouTube 업로드")
         url = upload_from_result(out, OUT_DIR / "result_text.txt", args.privacy, args.link)

@@ -118,16 +118,78 @@ def build_tags(meta: dict) -> list[str]:
     return tags
 
 
+# 링크 안내 문구: 영상마다 같은 문장이 반복되지 않도록 여러 표현을 상품 ID 로 골라 쓴다
+LINK_LINES = [
+    "👉 제품 링크는 채널 프로필의 링크에서 확인하세요.",
+    "👉 채널 프로필 링크에서 이 제품을 바로 볼 수 있어요.",
+    "👉 궁금하면 프로필에 걸어둔 링크에서 확인해 보세요.",
+    "👉 제품 정보는 프로필 링크에 모아뒀어요.",
+    "👉 프로필의 링크를 누르면 이 제품 페이지로 이동해요.",
+    "👉 자세한 가격과 후기는 채널 프로필 링크에서 볼 수 있어요.",
+]
+FRONTS_LOG = ROOT / "data" / "description_fronts.json"        # 지금까지 올린 설명 앞부분(중복 방지용)
+
+
+def _pick_variant(options: list[str], key: str) -> str:
+    return options[sum(ord(c) for c in key) % len(options)]
+
+
+def description_front(meta: dict) -> list[str]:
+    """설명란 앞부분(필수): 훅 + 상품 요약 + 이 영상 대본에서 뽑은 핵심 2~3줄. 상품마다 내용이 달라야 한다."""
+    script = [x.strip() for x in meta.get("script", []) if x.strip()]
+    body = script[1:4]                    # 2~4번째 문장: 핵심 기능/추가 장점/활용 팁
+    return [x for x in [meta.get("hook", ""), meta.get("headline", ""), *body] if x]
+
+
 def build_description(meta: dict, link: str) -> str:
     plat = meta.get("platform", "알리")
     hashtags = [t for t in meta.get("hashtags", []) if t.lower() != "#shorts"][:3] + ["#Shorts"] + PLATFORM_TAGS.get(plat, PLATFORM_TAGS["알리"])[1]
-    lines = [meta.get("hook", ""), meta.get("headline", "")]
-    lines += ["", "👉 제품 링크는 채널 프로필의 링크에서 확인하세요.",
-              "※ " + (meta.get("disclosure") or "이 게시물은 제휴 마케팅 활동의 일환으로, 구매 시 일정 수수료를 지급받을 수 있습니다."),
-              *(["※ " + meta["notice"]] if meta.get("notice") else []),
-              *["※ " + t for t in meta.get("extra_notes", [])],
-              "", " ".join(dict.fromkeys(hashtags))]
-    return "\n".join(l for i, l in enumerate(lines) if l or i >= 2).strip()
+    link_line = _pick_variant(LINK_LINES, str(meta.get("product_id") or meta.get("hook", "")))
+    lines = [*description_front(meta), "", link_line,
+             "※ " + (meta.get("disclosure") or "이 게시물은 제휴 마케팅 활동의 일환으로, 구매 시 일정 수수료를 지급받을 수 있습니다."),
+             *(["※ " + meta["notice"]] if meta.get("notice") else []),
+             *["※ " + t for t in meta.get("extra_notes", [])],
+             "", " ".join(dict.fromkeys(hashtags))]
+    return chr(10).join(l for i, l in enumerate(lines) if l or i >= 2).strip()
+
+
+def check_description_unique(meta: dict) -> None:
+    """설명 앞부분이 비어 있거나(대본 정보 없음) 이전에 올린 영상과 같으면 업로드를 막는다."""
+    front = description_front(meta)
+    if len(front) < 3:
+        raise SystemExit("[중단] 설명란 앞부분에 상품별 내용(대본 요약)이 없습니다. 영상을 다시 만들어 .meta.json 에 'script' 가 들어가게 하세요.")
+    key = " ".join(front)
+    try:
+        seen = json.loads(FRONTS_LOG.read_text(encoding="utf-8")) if FRONTS_LOG.exists() else []
+    except (OSError, ValueError):
+        seen = []
+    if key in seen:
+        raise SystemExit("[중단] 이전에 올린 영상과 설명 앞부분이 같습니다. 설명을 다르게 해야 합니다.")
+
+
+def remember_description(meta: dict) -> None:
+    key = " ".join(description_front(meta))
+    try:
+        seen = json.loads(FRONTS_LOG.read_text(encoding="utf-8")) if FRONTS_LOG.exists() else []
+        FRONTS_LOG.parent.mkdir(exist_ok=True)
+        FRONTS_LOG.write_text(json.dumps(seen + [key], ensure_ascii=False), encoding="utf-8")
+    except (OSError, ValueError):
+        pass
+
+
+# ───────────────────────── 업로드 보류 ─────────────────────────
+HOLD_FILE = ROOT / "data" / "upload_hold.json"            # {"until": "YYYY-MM-DD", "reason": "..."} 날짜 전까지 업로드를 하지 않는다
+
+
+def upload_hold() -> str | None:
+    """보류 중이면 안내 문구를, 아니면 None 을 돌려준다."""
+    try:
+        h = json.loads(HOLD_FILE.read_text(encoding="utf-8"))
+        if datetime.date.today() < datetime.date.fromisoformat(h["until"]):
+            return f"업로드 보류 중입니다 ({h['until']} 전까지{': ' + h['reason'] if h.get('reason') else ''}). 해제하려면 data/upload_hold.json 을 지우거나 --ignore-hold 를 쓰세요."
+    except (OSError, ValueError, KeyError):
+        pass
+    return None
 
 
 def build_comment(meta: dict, link: str) -> str:
@@ -233,6 +295,8 @@ def upload_from_result(video: Path, result_txt: Path | None = None, privacy: str
                        link: str | None = None, dry_run: bool = False, meta_path: Path | None = None,
                        publish: bool = True) -> str:
     """main.py 호환 진입점. meta_path 가 없으면 result_txt 와 같은 폴더의 result_meta.json 을 쓴다."""
+    if privacy == "private":                 # 비공개를 직접 지정했으면 댓글 후 자동 공개 전환도 하지 않는다
+        publish = False
     privacy = privacy or DEFAULT_PRIVACY
     video_meta = Path(video).with_name(Path(video).stem + ".meta.json")      # 영상별 정보가 있으면 그것을 우선 (다른 영상 정보로 올라가는 사고 방지)
     if meta_path is None and video_meta.exists():
@@ -249,6 +313,10 @@ def upload_from_result(video: Path, result_txt: Path | None = None, privacy: str
     if dry_run:
         print(f"[제목 {len(title)}자] {title}\n\n[설명]\n{description}\n\n[태그] {', '.join(tags)}\n\n[댓글]\n{comment}")
         return "(dry-run)"
+    hold = upload_hold()
+    if hold:
+        raise SystemExit(f"[중단] {hold}")
+    check_description_unique(meta)
     if not link or PLACEHOLDER in comment:
         raise SystemExit("[중단] 제휴 링크가 없습니다. --link \"https://...\" 로 지정하거나 result_meta.json 의 link 를 채우세요.")
 
@@ -256,6 +324,7 @@ def upload_from_result(video: Path, result_txt: Path | None = None, privacy: str
     video_id = upload_video(youtube, video, title, description, tags, privacy, paid_promo=meta.get("platform") in AD_TITLE_PLATFORMS)
     print(f"  Video ID: {video_id}")
     url = f"https://youtu.be/{video_id}"
+    remember_description(meta)
 
     # 업로드가 성공한 즉시 히스토리에 영구 기록 (댓글 단계에서 실패해도 같은 상품이 다시 뽑히지 않게)
     if meta.get("product_id"):
