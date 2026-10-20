@@ -164,7 +164,8 @@ def next_pending(platform: str | None = None, row: int | None = None) -> dict | 
             use_file = media / "_사용.txt"            # 사용할 이미지와 순서를 직접 지정 (줄마다 파일명 또는 파일명 일부)
             if use_file.exists():
                 wanted = [l.strip() for l in use_file.read_text(encoding="utf-8").splitlines() if l.strip() and not l.startswith("#")]
-                files = [next((f for f in files if w in f.name), None) for w in wanted]
+                pool = files + [f for f in sorted(media.rglob("*")) if f.is_file() and f not in files]      # 하위 폴더의 파일도 이름으로 찾는다
+                files = [next((f for f in pool if w in f.name), None) for w in wanted]
                 files = [f for f in files if f]
             def _lines(name: str) -> list[str]:       # 소재 폴더의 텍스트 파일(# 주석 제외)
                 fp = media / name
