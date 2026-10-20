@@ -89,6 +89,18 @@ def _price_num(price: str) -> int:
     return int(re.sub(r"[^0-9]", "", price) or 0)
 
 
+def _expected_value(p: dict) -> float:
+    """수익 잠재력: 건당 수수료 x 주문량의 제곱근 (수수료율을 모르면 판매량만으로 비교)."""
+    sales = float(p.get("sales") or 0)
+    try:
+        rate = float(str(p.get("rate", "")).replace("%", "")) / 100
+    except ValueError:
+        rate = 0.0
+    if not rate:
+        return sales
+    return _price_num(p["price"]) * rate * (sales ** 0.5)
+
+
 def rank_candidates(products: list[dict], need_video: bool = True,
                     exclude_ids: set[str] | None = None, max_price: int = 0,
                     min_price: int = 0) -> list[tuple[int, dict]]:
@@ -99,7 +111,7 @@ def rank_candidates(products: list[dict], need_video: bool = True,
            and p["product_id"] not in (exclude_ids or set())
            and (not max_price or _price_num(p["price"]) <= max_price)
            and _price_num(p["price"]) >= min_price]
-    out.sort(key=lambda t: (not priority_hits(t[1]["name"]), -int(float(t[1]["sales"] or 0)), t[0]))
+    out.sort(key=lambda t: (not priority_hits(t[1]["name"]), -_expected_value(t[1]), t[0]))
     return out
 
 
@@ -366,16 +378,19 @@ if __name__ == "__main__":
 
 # 관심 가는 품목 검색어(콘셉트별 인기 꿀템). API 조회용
 API_KEYWORDS = ["캠핑 랜턴", "휴대용 선풍기", "미니 마사지건", "무선 청소기", "게이밍 마우스", "블루투스 키보드",
-                "차량용 거치대", "스마트워치", "LED 무드등", "휴대용 믹서기", "목 마사지기", "미니 프로젝터"]
+                "차량용 거치대", "스마트워치", "LED 무드등", "휴대용 믹서기", "목 마사지기", "미니 프로젝터",
+                "무선 이어폰", "전동 칫솔", "스탠딩 조명", "보조배터리", "로봇 청소기", "차량용 청소기",
+                "캠핑 의자", "휴대용 블렌더", "게임 컨트롤러", "스마트 체중계"]
 
 
-def load_products_api(keywords: list[str] | None = None, per_kw: int = 20, verbose: bool = False) -> list[dict]:
+def load_products_api(keywords: list[str] | None = None, per_kw: int = 20, verbose: bool = False,
+                      min_price: int = 0, max_price: int = 0) -> list[dict]:
     """Affiliate API(product.query)로 키워드별 인기 상품을 모아 엑셀 로더와 같은 형태로 돌려준다."""
     from ali_trend_collector import query_api_keyword
     merged: dict[str, dict] = {}
     for kw in keywords or API_KEYWORDS:
         try:
-            items = query_api_keyword(kw, per_kw)
+            items = query_api_keyword(kw, per_kw, min_price, max_price)
         except Exception as e:           # 한 검색어가 실패해도 나머지는 계속
             print(f"  [경고] '{kw}' 조회 실패: {e}")
             continue
@@ -389,6 +404,6 @@ def load_products_api(keywords: list[str] | None = None, per_kw: int = 20, verbo
                 "original_price": _won(str(p["original_price"])) if p["original_price"] else "",
                 "discount": "", "sales": str(p["volume"] or 0), "feedback": "",
                 "image": p["images"][0] if p["images"] else "", "affiliate_link": p["affiliate_link"],
-                "video": p.get("video", ""), "source": "api", "images": p["images"],
+                "video": p.get("video", ""), "source": "api", "images": p["images"], "rate": p.get("rate", ""),
             }
     return list(merged.values())

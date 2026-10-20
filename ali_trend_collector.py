@@ -180,15 +180,16 @@ def parse_api_response(j: dict) -> list[dict]:
             "category": p.get("first_level_category_name", ""),
             "source": "api",
             "video": p.get("product_video_url", ""),
+            "rate": p.get("commission_rate", ""),
         })
     return out
 
 
-def query_api_keyword(keyword: str, page_size: int = 20) -> list[dict]:
-    return query_api("", 1, page_size, keyword=keyword)
+def query_api_keyword(keyword: str, page_size: int = 20, min_price: int = 0, max_price: int = 0) -> list[dict]:
+    return query_api("", 1, page_size, keyword=keyword, min_price=min_price, max_price=max_price)
 
 
-def query_api(category: str, page_no: int = 1, page_size: int = 20, keyword: str = "") -> list[dict]:
+def query_api(category: str, page_no: int = 1, page_size: int = 20, keyword: str = "", min_price: int = 0, max_price: int = 0) -> list[dict]:
     cat_id = CATEGORIES.get(category, category if category.isdigit() else "")
     params = {
         "app_key": os.environ["ALI_APP_KEY"].strip(),
@@ -208,6 +209,10 @@ def query_api(category: str, page_no: int = 1, page_size: int = 20, keyword: str
         params["category_ids"] = cat_id
     if keyword:
         params["keywords"] = keyword
+    if min_price:
+        params["min_sale_price"] = str(min_price)       # 원화 기준(KRW)
+    if max_price:
+        params["max_sale_price"] = str(max_price)
     params["sign"] = sign_params(params, os.environ["ALI_APP_SECRET"].strip())
     r = requests.post(GATEWAY, data=params, headers={"User-Agent": UA}, timeout=(10, 30))
     r.raise_for_status()

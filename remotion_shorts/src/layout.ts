@@ -1,7 +1,7 @@
 import { staticFile } from "remotion";
 
 export const NEON = "#FFF01F"; // 네온 옐로우
-export const FONT = "'Pretendard', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif";
+export const FONT = "'PretendardLocal', 'Pretendard', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif";
 
 // 시연 비디오/상품 카드가 쓰는 메인 영역: 상단 헤더 박스(~y430)와 자막(y1450~) 사이, 화면 정중앙(좌우 60px 여백)
 export const CARD = 910; // 이미지 카드 크기 (메인 영역 높이와 같은 정사각형)

@@ -49,10 +49,10 @@ SALE_POOL = [
     "지금 알리 세일 들어가서 역대급 가격에 풀렸는데 얼마인지는 링크로 직접 확인해봐.",
 ]
 CTA_POOL = [
-    "품절되고 후회하지 말고 프로필 링크 눌러라.",
+    "할인 끝나고 후회하지 말고 프로필 링크 눌러라.",
     "오늘 수업은 여기까지 궁금하면 프로필 링크에서 직접 확인해봐.",
     "프로필 링크에 정리해뒀으니까 궁금하면 복습하러 와.",
-    "품절되기 전에 프로필 링크에서 복습하고 가봐.",
+    "할인 끝나기 전에 프로필 링크에서 복습하고 가봐.",
 ]
 # 훅 컷에 쓸 마멋 영상 분위기(assets/broll/_mascot/<calm|intense>/): 일상 공감형은 차분한 컷, 활동·취미형은 강렬한 컷
 MASCOT_TONE = {"lazy": "calm", "desk": "calm", "camp": "intense", "sport": "intense", "hobby": "intense"}
@@ -68,7 +68,7 @@ CTA_NEUTRAL = [
     "마음에 들면 프로필 링크에서 직접 확인해봐.",
     "써보고 싶으면 프로필 링크 남겨둘 테니까 한번 봐봐.",
     "궁금하면 프로필 링크에서 어떤지 직접 보고 가.",
-    "품절되기 전에 프로필 링크에서 한번 둘러봐.",
+    "할인 끝나기 전에 프로필 링크에서 한번 둘러봐.",
 ]
 SALE_LINE, LAST_LINE = SALE_POOL[0], CTA_POOL[0]     # main()에서 pick_lines()로 무작위 교체
 CLICHE_RE = re.compile(r"버튼만 누르면|손 하나 안|하면 끝남")      # 천편일률 문장 패턴: 나오면 재생성
@@ -538,8 +538,13 @@ def synth_audio(sentences: list[str]) -> tuple[Path, list[float], list[list[dict
         all_words.append([{"w": w["w"], "t0": max(0.0, w["t0"] - lead), "t1": max(0.0, w["t1"] - lead)} for w in words])
     lst = WORK_DIR / "tts_list.txt"
     lst.write_text("".join(f"file '{p.name}'\n" for p in parts), encoding="utf-8")
+    raw = WORK_DIR / "voice_raw.wav"
+    run([FFMPEG, "-y", "-f", "concat", "-safe", "0", "-i", str(lst), "-c", "copy", str(raw)])   # 이어붙이기는 재인코딩 없음
     out = OUT_DIR / "voice.wav"
-    run([FFMPEG, "-y", "-f", "concat", "-safe", "0", "-i", str(lst), "-c", "copy", str(out)])   # 재인코딩 없음: 길이/위치 오차 0
+    # 목소리 보정(길이는 그대로): 저음 웅웅거림 제거 -> 명료도(3kHz) 살짝 강조 -> 컴프레서로 음량 편차 줄이기 -> 쇼츠 표준 음량(-16 LUFS)
+    run([FFMPEG, "-y", "-i", str(raw), "-af",
+         "highpass=f=70,equalizer=f=3200:t=q:w=1.1:g=2.5,acompressor=threshold=-20dB:ratio=3:attack=5:release=90:makeup=2,"
+         "loudnorm=I=-16:TP=-1.5:LRA=7", "-ar", "44100", "-ac", "1", str(out)])
     return out, durs, all_words
 
 
@@ -662,6 +667,11 @@ def build_remotion_data(data: dict, sentences: list[str], durs: list[float], aud
         if old.is_file():
             old.unlink()
     shutil.copy2(audio, REMOTION_PUBLIC / audio.name)
+    font_dir = ROOT / "assets" / "fonts"
+    if font_dir.exists():                          # Pretendard 폰트(자막/제목): 있으면 Remotion 에 복사
+        (REMOTION_PUBLIC / "fonts").mkdir(exist_ok=True)
+        for f in font_dir.glob("*.otf"):
+            shutil.copy2(f, REMOTION_PUBLIC / "fonts" / f.name)
     images = list(image_urls)
     for i, m in enumerate(media):
         still = frame_source(m, i)
@@ -817,6 +827,23 @@ def write_work_log(data: dict, product: dict | None, args, concept: dict, full_n
 
 
 # ───────────────────────── main ─────────────────────────
+RECENT_CONCEPTS = ROOT / "data" / "recent_concepts.json"
+
+
+def _recent_concepts(n: int = 3) -> list[str]:
+    try:
+        return json.loads(RECENT_CONCEPTS.read_text(encoding="utf-8"))[-n:]
+    except (OSError, ValueError):
+        return []
+
+
+def _remember_concept(key: str) -> None:
+    try:
+        RECENT_CONCEPTS.write_text(json.dumps((_recent_concepts(20) + [key])[-20:]), encoding="utf-8")
+    except OSError:
+        pass
+
+
 def main():
     global FFMPEG, FFPROBE, DISCLOSURE, DISCLOSURE_SHORT, PLATFORM, NOTICE, EXTRA_NOTES
     ap = argparse.ArgumentParser()
@@ -828,8 +855,8 @@ def main():
     ap.add_argument("--ignore-hold", action="store_true", help="data/upload_hold.json 의 업로드 보류를 무시하고 업로드")
     ap.add_argument("--fullbleed", action="store_true", help="실험: 비디오 컷을 화면 전체로 채우는 풀블리드 레이아웃")
     ap.add_argument("--no-hero", action="store_true", help="실험: 마멋 AI 훅 영상을 첫 컷에 쓰지 않고 상황 b-roll 로 시작")
-    ap.add_argument("--min-price", type=int, default=5000, help="자동 선별 시 할인가 하한(원): 1~4천 원대 비닐/소모품/부속 파츠 차단")
-    ap.add_argument("--max-price", type=int, default=50000, help="자동 선별 시 할인가 상한(원): 충동구매형 꿀템만 (0이면 무제한)")
+    ap.add_argument("--min-price", type=int, default=15000, help="자동 선별 시 할인가 하한(원): 저가 소모품/부속 파츠 차단, 건당 수수료 확보")
+    ap.add_argument("--max-price", type=int, default=60000, help="자동 선별 시 할인가 상한(원): 충동구매형 꿀템만 (0이면 무제한)")
     ap.add_argument("--select-only", action="store_true", help="상품 선정(필터+비디오+링크 검증)까지만 하고 종료 (예약/렌더링/업로드 없음)")
     ap.add_argument("--no-history", action="store_true", help="렌더링한 상품을 사용 이력(data/trend_history.json)에 기록하지 않음")
     ap.add_argument("--out", help="출력 파일명 (output/ 아래, 기본: shorts_product_NN.mp4)")
@@ -878,7 +905,7 @@ def main():
         from ali_trend_collector import _load_history, mark_used, release_used
         if args.api:
             from ali_csv_loader import load_products_api
-            pool = load_products_api(verbose=True)
+            pool = load_products_api(verbose=True, min_price=args.min_price, max_price=args.max_price)
         else:
             pool = load_products(verbose=True)
         used = _load_history()
@@ -889,8 +916,11 @@ def main():
                 print(f"  [경고] 직접 지정한 {args.rank}위의 제휴 링크가 유효하지 않습니다: {why}")
         else:
             # 제외 키워드 필터 -> 우선 키워드/판매량 순 -> 비디오 해상도 확인
-            for rk, cand in rank_candidates(pool, need_video=False, exclude_ids=used, max_price=args.max_price,
-                                            min_price=args.min_price):
+            ranked = rank_candidates(pool, need_video=False, exclude_ids=used, max_price=args.max_price,
+                                     min_price=args.min_price)
+            recent = _recent_concepts()               # 같은 날 비슷한 영상만 반복되지 않게: 최근 3편과 다른 콘셉트를 먼저 시도
+            ranked = [t for t in ranked if classify(t[1]["name"])[0]["key"] not in recent] +                      [t for t in ranked if classify(t[1]["name"])[0]["key"] in recent]
+            for rk, cand in ranked:
                 has_broll = bool(broll.list_clips(classify(cand["name"])[0]["key"]))
                 if not cand["video"] and not has_broll:       # 상품 영상도 b-roll 도 없으면 슬라이드쇼가 되므로 제외
                     continue
@@ -922,6 +952,7 @@ def main():
             # 렌더링 시작 전에 예약 기록: 같은 큐를 도는 다음 실행이 이 상품을 절대 다시 잡지 않는다
             mark_used(product["product_id"])
             atexit.register(lambda pid=product["product_id"]: None if finished["ok"] else release_used(pid))
+        _remember_concept(classify(product["name"])[0]["key"])
         args.name, args.features = product["name"][:80], product_features(product)
         args.link = args.link or product["affiliate_link"]
         print(f"[엑셀] {args.rank}위: {product['name'][:50]} / {product['price']} / {product['affiliate_link']}")

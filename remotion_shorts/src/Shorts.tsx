@@ -1,10 +1,12 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import {
   AbsoluteFill,
   Audio,
   Img,
   OffthreadVideo,
   Sequence,
+  continueRender,
+  delayRender,
   interpolate,
   spring,
   staticFile,
@@ -18,6 +20,19 @@ import { CROSSFADE, FONT, MAIN_H, MAIN_SIDE, MAIN_TOP, NEON } from "./layout";
 import { ShortsData } from "./types";
 
 const PUNCT = /[,."\u201c\u201d'\u2018\u2019()]/g;
+
+// ───────── 폰트: public/fonts 의 Pretendard(있을 때만). 없으면 시스템 폰트로 대체 ─────────
+const useFonts = () => {
+  const [handle] = useState(() => delayRender("fonts"));
+  useEffect(() => {
+    const faces = [
+      new FontFace("PretendardLocal", `url(${staticFile("fonts/Pretendard-ExtraBold.otf")})`, { weight: "700 800" }),
+      new FontFace("PretendardLocal", `url(${staticFile("fonts/Pretendard-Black.otf")})`, { weight: "900" }),
+    ];
+    Promise.all(faces.map((f) => f.load().then((l) => document.fonts.add(l)).catch(() => undefined)))
+      .finally(() => continueRender(handle));
+  }, [handle]);
+};
 
 // ───────── 배경 ─────────
 const Background: React.FC = () => {
@@ -318,6 +333,7 @@ const bgmVolume = (f: number, narrationFrames: number, total: number) => {
 
 // ───────── 메인 컴포지션 ─────────
 export const Shorts: React.FC<{ data: ShortsData }> = ({ data }) => {
+  useFonts();
   const { timings, narrationFrames, total } = buildTimings(data);
   const frameCounts = timings.map((t, i) => (i === timings.length - 1 ? total - t.start : t.frames));
   const visuals = planVisuals(data, frameCounts);

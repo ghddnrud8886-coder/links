@@ -2,7 +2,7 @@ import React from "react";
 import { interpolate, spring, useCurrentFrame, useVideoConfig } from "remotion";
 
 const NEON = "#FFF01F";
-const FONT = "'Pretendard', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif";
+import { FONT } from "./layout";
 const PUNCT = /[,."“”'‘’()]/g;
 const ONE_LINE_MAX = 14; // 이 글자 수 이하면 한 줄, 넘으면 어절 기준으로 두 줄
 const TWO_LINE_MAX = 32; // 이 글자 수를 넘으면 세 줄로 나눈다
@@ -104,7 +104,7 @@ export const SentenceSubtitle: React.FC<{
             const started = !timed || t >= timed[i].start - 0.06;
             // scale 은 레이아웃을 밀어내지 않으므로 키워드는 최대 1.12배로 제한하고 좌우 여백(margin)으로 이웃 단어와 겹치지 않게 한다
             const scale = started ? (hit[i] ? 1.0 + 0.12 * Math.min(1.2, pop) : 0.9 + 0.1 * pop) : 0.94;
-            const on = timed ? interpolate(t, [timed[i].start - 0.06, timed[i].start + 0.04], [0.42, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" }) : 1;
+            const on = timed ? interpolate(t, [timed[i].start - 0.06, timed[i].start + 0.04], [0.62, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" }) : 1;
             return (
               <span
                 key={i}
